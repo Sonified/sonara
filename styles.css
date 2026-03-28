@@ -1353,3 +1353,5 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+#team { display: none; }
