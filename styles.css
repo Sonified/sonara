@@ -163,11 +163,23 @@ a:hover { opacity: 0.7; }
   line-height: 1;
   margin-bottom: 0.5rem;
   opacity: 0;
-  animation: fadeUp 1.2s ease forwards 0.4s;
+  animation: fadeUp 1.2s ease forwards 0.4s, innerGlow 8s ease-in-out infinite 2s;
   background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  filter: drop-shadow(0 0 0px rgba(196, 163, 90, 0));
+}
+
+@keyframes innerGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 2px rgba(196, 163, 90, 0.05));
+    background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+  }
+  50% {
+    filter: drop-shadow(0 0 30px rgba(196, 163, 90, 0.3)) drop-shadow(0 0 60px rgba(196, 163, 90, 0.1));
+    background: linear-gradient(135deg, rgba(255, 240, 210, 1) 0%, var(--accent) 100%);
+  }
 }
 
 .hero-expansion {
