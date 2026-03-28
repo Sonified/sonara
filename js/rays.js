@@ -120,7 +120,7 @@
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.3 + Math.random() * 1.0;
       particles.push({
-        x: lx + (Math.random() - 0.5) * tw * 0.2,
+        x: lx + tw * 0.35 + (Math.random() - 0.5) * tw * 0.2,
         y: ly + (Math.random() - 0.5) * 120,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
