@@ -46,7 +46,11 @@
     const lightProgress = (time * 0.4) % 1;
     const lightX = textL - textW * 0.6 + lightProgress * textW * 2.2;
     const lightY = textCY;
-    const breath = 0.7 + 0.2 * Math.sin(time * 1.5);
+    // Fade in/out at edges so light builds as it approaches letters
+    const edgeFade = lightProgress < 0.2 ? lightProgress / 0.2 
+                   : lightProgress > 0.8 ? (1 - lightProgress) / 0.2 
+                   : 1;
+    const breath = (0.7 + 0.2 * Math.sin(time * 1.5)) * edgeFade;
 
     // Draw text on offscreen
     oc.clearRect(0, 0, w, h);
