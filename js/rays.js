@@ -181,7 +181,7 @@
     // --- the radial mask overlaps the text area ---
     // The glow is brightest at lightX. It hits the text when lightX is within
     const glowRadius = textW * 0.6;
-    const glowHitsText = sweeping && breath > 0.01 &&
+    const glowHitsText = sweeping && breath > 0.01 && lightProgress < 0.8 &&
       lightX + glowRadius > textL && lightX - glowRadius < textR;
 
     if (glowHitsText && Math.random() < 0.5) {
