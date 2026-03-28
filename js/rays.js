@@ -1,11 +1,7 @@
 /**
  * Volumetric light rays projecting FORWARD from letter edges.
- * 
- * Technique:
- * 1. Draw the text filled with bright light color on offscreen canvas
- * 2. Apply directional radial blur OUTWARD from a moving light center
- * 3. Composite the blurred rays ON TOP of the text (they project forward)
- * 4. The letters themselves are rendered by CSS — this canvas only adds the rays
+ * Canvas sits on top with screen blend mode.
+ * Rays radially zoom-blur outward from a moving light source.
  */
 
 (function() {
@@ -17,94 +13,76 @@
   let w, h;
   let time = 0;
 
-  // Offscreen for generating the ray source
   const offscreen = document.createElement('canvas');
   const oc = offscreen.getContext('2d');
 
   function resize() {
-    const title = canvas.parentElement;
-    const rect = title.getBoundingClientRect();
-    w = Math.ceil(rect.width * 1.4);
-    h = Math.ceil(rect.height * 3);
+    const rect = canvas.getBoundingClientRect();
+    w = rect.width;
+    h = rect.height;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
     offscreen.width = w * dpr;
     offscreen.height = h * dpr;
     oc.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  function getTextInfo() {
-    const title = canvas.parentElement;
-    const span = title.querySelector('.glow-wrap');
-    if (!span) return null;
-    const titleRect = title.getBoundingClientRect();
-    const spanRect = span.getBoundingClientRect();
-    const style = getComputedStyle(span);
-    
-    // Center of text relative to canvas
-    const canvasOffsetX = (w - titleRect.width * 1.4) / 2;
-    const cx = (spanRect.left - titleRect.left) + spanRect.width / 2 + w * 0.1;
-    const cy = h / 2;
-    
-    return {
-      text: 'SONARA',
-      font: `${style.fontWeight} ${parseFloat(style.fontSize)}px ${style.fontFamily}`,
-      letterSpacing: parseFloat(style.letterSpacing) || 0,
-      cx: cx,
-      cy: cy,
-      width: spanRect.width
-    };
   }
 
   function draw() {
     time += 0.004;
     ctx.clearRect(0, 0, w, h);
 
-    const info = getTextInfo();
-    if (!info) { requestAnimationFrame(draw); return; }
+    const span = document.querySelector('.hero-title .glow-wrap');
+    if (!span) { requestAnimationFrame(draw); return; }
 
-    // Light source position: moves left to right behind the text
+    const canvasRect = canvas.getBoundingClientRect();
+    const spanRect = span.getBoundingClientRect();
+    const style = getComputedStyle(span);
+
+    // Text position relative to canvas
+    const textCX = (spanRect.left - canvasRect.left) + spanRect.width / 2;
+    const textCY = (spanRect.top - canvasRect.top) + spanRect.height / 2;
+    const textW = spanRect.width;
+
+    // Light source sweeps left to right
     const lightProgress = (Math.sin(time * 0.5) + 1) / 2;
-    const lightX = info.cx - info.width * 0.4 + lightProgress * info.width * 0.8;
-    const lightY = info.cy;
+    const lightX = textCX - textW * 0.35 + lightProgress * textW * 0.7;
+    const lightY = textCY;
 
-    // Intensity breathes gently
+    // Breathing intensity
     const breath = 0.5 + 0.3 * Math.sin(time * 1.2);
 
-    // --- Step 1: Draw bright text on offscreen as the "ray source" ---
+    // Step 1: Draw bright text on offscreen
     oc.clearRect(0, 0, w, h);
-    oc.font = info.font;
-    oc.letterSpacing = info.letterSpacing + 'px';
+    oc.font = `${style.fontWeight} ${parseFloat(style.fontSize)}px ${style.fontFamily}`;
+    if (style.letterSpacing && style.letterSpacing !== 'normal') {
+      oc.letterSpacing = style.letterSpacing;
+    }
     oc.textAlign = 'center';
     oc.textBaseline = 'middle';
-    oc.fillStyle = `rgba(255, 225, 150, ${breath * 0.8})`;
-    oc.fillText(info.text, info.cx, info.cy);
+    oc.fillStyle = `rgba(255, 225, 150, ${breath * 0.7})`;
+    oc.fillText('SONARA', textCX, textCY);
 
-    // --- Step 2: Radial zoom blur outward from light position ---
-    // This stretches the text outward from the light point, creating rays
-    const numPasses = 30;
-    const maxScale = 0.25; // how far rays extend
+    // Step 2: Radial zoom blur from light position
+    const numPasses = 25;
+    const maxScale = 0.2;
 
     ctx.globalCompositeOperation = 'screen';
 
     for (let i = 0; i < numPasses; i++) {
       const t = i / numPasses;
       const scale = 1 + t * maxScale;
-      const alpha = (1 - t) * (1 / numPasses) * 3 * breath;
+      const alpha = (1 - t) * (1 / numPasses) * 3.5 * breath;
 
       ctx.globalAlpha = alpha;
 
-      // Scale from the light source position
-      const sw = w * scale;
-      const sh = h * scale;
-      const dx = lightX - lightX * scale;
-      const dy = lightY - lightY * scale;
-
-      ctx.drawImage(offscreen, dx, dy, sw, sh);
+      // Scale outward from the light source
+      ctx.save();
+      ctx.translate(lightX, lightY);
+      ctx.scale(scale, scale);
+      ctx.translate(-lightX, -lightY);
+      ctx.drawImage(offscreen, 0, 0, w, h);
+      ctx.restore();
     }
 
     ctx.globalAlpha = 1.0;
@@ -118,6 +96,6 @@
     setTimeout(() => {
       resize();
       draw();
-    }, 500);
+    }, 800);
   });
 })();
