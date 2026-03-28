@@ -1,7 +1,6 @@
 /**
- * Volumetric light rays projecting FORWARD from letter edges.
- * Canvas sits on top with screen blend mode.
- * Rays radially zoom-blur outward from a moving light source.
+ * Volumetric light rays from behind SONARA text.
+ * A tight light source moves L-R. Rays bloom outward from letters near the light.
  */
 
 (function() {
@@ -39,68 +38,53 @@
     const spanRect = span.getBoundingClientRect();
     const style = getComputedStyle(span);
 
-    // Text position relative to canvas
-    const textCX = (spanRect.left - canvasRect.left) + spanRect.width / 2;
     const textCY = (spanRect.top - canvasRect.top) + spanRect.height * 0.55;
     const textW = spanRect.width;
+    const textL = spanRect.left - canvasRect.left;
 
-    // Tight light source sweeps left to right across letters
+    // Light sweeps left to right
     const lightProgress = (Math.sin(time * 0.4) + 1) / 2;
-    const textLeft = spanRect.left - canvasRect.left;
-    const lightX = textLeft + lightProgress * textW;
+    const lightX = textL + lightProgress * textW;
     const lightY = textCY;
+    const breath = 0.7 + 0.2 * Math.sin(time * 1.5);
 
-    // Subtle breathing
-    const breath = 0.6 + 0.15 * Math.sin(time * 1.5);
-
-    // Step 1: Draw bright text on offscreen, scaled to match CSS span exactly
+    // Draw text on offscreen
     oc.clearRect(0, 0, w, h);
     const fontSize = parseFloat(style.fontSize);
     oc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
     oc.textBaseline = 'middle';
     oc.letterSpacing = style.letterSpacing;
-    oc.fillStyle = `rgba(255, 225, 150, ${breath * 0.8})`;
-    
-    // Measure what canvas thinks the width is
+    oc.fillStyle = `rgba(255, 225, 150, 1)`;
+
     const measured = oc.measureText('SONARA');
-    const canvasTextWidth = measured.width;
-    const cssTextWidth = spanRect.width;
-    
-    // Scale horizontally to match CSS exactly
-    const scaleX = cssTextWidth / canvasTextWidth;
-    const textLeft = spanRect.left - canvasRect.left;
-    
+    const scaleX = spanRect.width / measured.width;
+
     oc.save();
-    oc.translate(textLeft, textCY);
+    oc.translate(textL, textCY);
     oc.scale(scaleX, 1);
     oc.textAlign = 'left';
     oc.fillText('SONARA', 0, 0);
     oc.restore();
-    
-    // Mask: only keep the area near the light source
+
+    // Mask to tight spotlight around light position
     oc.globalCompositeOperation = 'destination-in';
-    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 0.25);
+    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 0.22);
     mask.addColorStop(0, 'rgba(255,255,255,1)');
-    mask.addColorStop(0.6, 'rgba(255,255,255,0.5)');
+    mask.addColorStop(0.5, 'rgba(255,255,255,0.6)');
     mask.addColorStop(1, 'rgba(255,255,255,0)');
     oc.fillStyle = mask;
     oc.fillRect(0, 0, w, h);
     oc.globalCompositeOperation = 'source-over';
 
-    // Step 2: Radial zoom blur from light position — many small passes for smooth rays
-    const numPasses = 60;
-    const maxScale = 0.12;
-
+    // Radial zoom blur: 40 passes, visible alpha
     ctx.globalCompositeOperation = 'screen';
 
-    for (let i = 0; i < numPasses; i++) {
-      const t = i / numPasses;
-      const scale = 1 + t * maxScale;
-      const alpha = (1 - t * t) * (1 / numPasses) * 2.5 * breath;
+    for (let i = 0; i < 40; i++) {
+      const t = i / 40;
+      const scale = 1 + t * 0.15;
+      const alpha = (1 - t) * 0.08 * breath;
 
       ctx.globalAlpha = alpha;
-
-      // Scale outward from the light source
       ctx.save();
       ctx.translate(lightX, lightY);
       ctx.scale(scale, scale);
@@ -117,9 +101,6 @@
 
   window.addEventListener('resize', resize);
   document.fonts.ready.then(() => {
-    setTimeout(() => {
-      resize();
-      draw();
-    }, 800);
+    setTimeout(() => { resize(); draw(); }, 800);
   });
 })();
