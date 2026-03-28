@@ -107,9 +107,11 @@
 
     // Sparkle particles only when light is over the letters
     // Only sparkle when light is actually over the letters
-    const sweeping = cycle < 0.6;
-    const overLetters = sweeping && lightX >= textL && lightX <= textL + textW;
-    updateParticles(lightX, lightY, overLetters ? 0.8 : 0, textW);
+    // Spawn particles where the glow is actually VISIBLE on the text
+    // The glow mask extends textW*1.0 from lightX, so the visible hotspot on the text is:
+    const glowVisibleX = Math.max(textL, Math.min(textL + textW, lightX));
+    const glowOnText = sweeping && (lightX + textW * 0.8 >= textL) && (lightX - textW * 0.8 <= textL + textW);
+    updateParticles(glowVisibleX, lightY, glowOnText ? 0.8 : 0, textW);
     drawParticles(ctx);
 
     requestAnimationFrame(draw);
