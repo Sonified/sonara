@@ -102,8 +102,9 @@
     ctx.globalAlpha = 1.0;
     ctx.globalCompositeOperation = 'source-over';
 
-    // Sparkle particles near the light source
-    updateParticles(lightX, lightY, breath, textW);
+    // Sparkle particles only when light is over the letters
+    const overLetters = lightX >= textL && lightX <= textL + textW;
+    updateParticles(lightX, lightY, overLetters ? breath : 0, textW);
     drawParticles(ctx);
 
     requestAnimationFrame(draw);
