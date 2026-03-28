@@ -58,7 +58,7 @@
     oc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
     oc.textBaseline = 'middle';
     oc.letterSpacing = style.letterSpacing;
-    oc.fillStyle = `rgba(255, 245, 235, 1)`;
+    oc.fillStyle = `rgba(255, 235, 190, 1)`;
 
     const measured = oc.measureText('SONARA');
     const scaleX = spanRect.width / measured.width;
