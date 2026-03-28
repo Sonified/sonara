@@ -1,8 +1,11 @@
 /**
- * Volumetric god rays from behind text.
- * Renders text as a stencil mask, places a moving light source behind it,
- * then radially blurs outward from the light position to create rays
- * that appear to shine through and around the letter edges.
+ * Volumetric light rays projecting FORWARD from letter edges.
+ * 
+ * Technique:
+ * 1. Draw the text filled with bright light color on offscreen canvas
+ * 2. Apply directional radial blur OUTWARD from a moving light center
+ * 3. Composite the blurred rays ON TOP of the text (they project forward)
+ * 4. The letters themselves are rendered by CSS — this canvas only adds the rays
  */
 
 (function() {
@@ -12,111 +15,109 @@
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   let w, h;
-  let lightX = 0; // 0-1, traveling left to right
   let time = 0;
+
+  // Offscreen for generating the ray source
+  const offscreen = document.createElement('canvas');
+  const oc = offscreen.getContext('2d');
 
   function resize() {
     const title = canvas.parentElement;
     const rect = title.getBoundingClientRect();
-    w = rect.width * 1.2;
-    h = rect.height * 2;
+    w = Math.ceil(rect.width * 1.4);
+    h = Math.ceil(rect.height * 3);
     canvas.width = w * dpr;
     canvas.height = h * dpr;
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    offscreen.width = w * dpr;
+    offscreen.height = h * dpr;
+    oc.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function getTextMetrics() {
+  function getTextInfo() {
     const title = canvas.parentElement;
     const span = title.querySelector('.glow-wrap');
+    if (!span) return null;
     const titleRect = title.getBoundingClientRect();
     const spanRect = span.getBoundingClientRect();
     const style = getComputedStyle(span);
+    
+    // Center of text relative to canvas
+    const canvasOffsetX = (w - titleRect.width * 1.4) / 2;
+    const cx = (spanRect.left - titleRect.left) + spanRect.width / 2 + w * 0.1;
+    const cy = h / 2;
+    
     return {
       text: 'SONARA',
-      fontSize: parseFloat(style.fontSize),
-      fontWeight: style.fontWeight,
-      fontFamily: style.fontFamily,
+      font: `${style.fontWeight} ${parseFloat(style.fontSize)}px ${style.fontFamily}`,
       letterSpacing: parseFloat(style.letterSpacing) || 0,
-      // Position of text relative to canvas
-      x: (spanRect.left - titleRect.left) + (w - titleRect.width * 1.2) / 2 + w * 0.05,
-      y: h * 0.5,
-      width: spanRect.width,
-      height: spanRect.height
+      cx: cx,
+      cy: cy,
+      width: spanRect.width
     };
   }
 
-  function drawRays() {
-    time += 0.003;
-    // Light moves left to right over ~10 seconds, pauses, returns
-    lightX = (Math.sin(time * 0.7) + 1) / 2;
-
+  function draw() {
+    time += 0.004;
     ctx.clearRect(0, 0, w, h);
 
-    const metrics = getTextMetrics();
+    const info = getTextInfo();
+    if (!info) { requestAnimationFrame(draw); return; }
 
-    // Light source position (behind the text, moving L-R)
-    const lx = metrics.x + lightX * metrics.width;
-    const ly = metrics.y;
+    // Light source position: moves left to right behind the text
+    const lightProgress = (Math.sin(time * 0.5) + 1) / 2;
+    const lightX = info.cx - info.width * 0.4 + lightProgress * info.width * 0.8;
+    const lightY = info.cy;
 
-    // 1. Draw the light/glow source
-    const offscreen = document.createElement('canvas');
-    offscreen.width = w * dpr;
-    offscreen.height = h * dpr;
-    const oc = offscreen.getContext('2d');
-    oc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Intensity breathes gently
+    const breath = 0.5 + 0.3 * Math.sin(time * 1.2);
 
-    // Draw text as black silhouette on the offscreen canvas
-    oc.font = `${metrics.fontWeight} ${metrics.fontSize}px ${metrics.fontFamily}`;
-    oc.letterSpacing = metrics.letterSpacing + 'px';
+    // --- Step 1: Draw bright text on offscreen as the "ray source" ---
+    oc.clearRect(0, 0, w, h);
+    oc.font = info.font;
+    oc.letterSpacing = info.letterSpacing + 'px';
     oc.textAlign = 'center';
     oc.textBaseline = 'middle';
+    oc.fillStyle = `rgba(255, 225, 150, ${breath * 0.8})`;
+    oc.fillText(info.text, info.cx, info.cy);
 
-    // Fill entire canvas with radial light from source
-    const grad = oc.createRadialGradient(lx, ly, 0, lx, ly, metrics.width * 0.6);
-    const intensity = 0.4 + 0.2 * Math.sin(time * 1.5);
-    grad.addColorStop(0, `rgba(196, 163, 90, ${intensity})`);
-    grad.addColorStop(0.3, `rgba(196, 163, 90, ${intensity * 0.5})`);
-    grad.addColorStop(0.7, `rgba(196, 163, 90, ${intensity * 0.15})`);
-    grad.addColorStop(1, 'rgba(196, 163, 90, 0)');
-    oc.fillStyle = grad;
-    oc.fillRect(0, 0, w, h);
+    // --- Step 2: Radial zoom blur outward from light position ---
+    // This stretches the text outward from the light point, creating rays
+    const numPasses = 30;
+    const maxScale = 0.25; // how far rays extend
 
-    // Cut out the text shape — this creates the "light blocked by letters" effect
-    oc.globalCompositeOperation = 'destination-out';
-    oc.fillStyle = 'black';
-    oc.fillText(metrics.text, metrics.x + metrics.width / 2, ly);
+    ctx.globalCompositeOperation = 'screen';
 
-    // 2. Radial blur (god rays) — sample outward from light source
-    // Draw the masked light source multiple times, slightly scaled outward from light pos
-    const passes = 20;
-    ctx.globalAlpha = 1.0 / passes;
-    for (let i = 0; i < passes; i++) {
-      const scale = 1 + (i / passes) * 0.15;
-      const dx = lx - lx * scale;
-      const dy = ly - ly * scale;
-      ctx.drawImage(offscreen,
-        dx, dy,
-        w * scale, h * scale
-      );
+    for (let i = 0; i < numPasses; i++) {
+      const t = i / numPasses;
+      const scale = 1 + t * maxScale;
+      const alpha = (1 - t) * (1 / numPasses) * 3 * breath;
+
+      ctx.globalAlpha = alpha;
+
+      // Scale from the light source position
+      const sw = w * scale;
+      const sh = h * scale;
+      const dx = lightX - lightX * scale;
+      const dy = lightY - lightY * scale;
+
+      ctx.drawImage(offscreen, dx, dy, sw, sh);
     }
+
     ctx.globalAlpha = 1.0;
+    ctx.globalCompositeOperation = 'source-over';
 
-    // 3. Also draw a subtle direct glow around the light source (not blocked)
-    const directGrad = ctx.createRadialGradient(lx, ly, 0, lx, ly, metrics.fontSize * 0.8);
-    directGrad.addColorStop(0, `rgba(255, 235, 180, ${intensity * 0.15})`);
-    directGrad.addColorStop(1, 'transparent');
-    ctx.fillStyle = directGrad;
-    ctx.fillRect(0, 0, w, h);
-
-    requestAnimationFrame(drawRays);
+    requestAnimationFrame(draw);
   }
 
   window.addEventListener('resize', resize);
-  // Wait for fonts to load
   document.fonts.ready.then(() => {
-    resize();
-    drawRays();
+    setTimeout(() => {
+      resize();
+      draw();
+    }, 500);
   });
 })();
