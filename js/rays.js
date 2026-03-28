@@ -154,13 +154,11 @@
     // [textL - glowRadius, textR + glowRadius]. The visible spot ON the text
     // is clamped to [textL, textR].
     const glowRadius = textW * 0.6; // effective visible radius (inner bright part)
-    const glowHitsText = sweeping && breath > 0.1 &&
-      lightX + glowRadius > textL && lightX - glowRadius < textR;
+    const lightOverText = sweeping && breath > 0.1 &&
+      lightX >= textL && lightX <= textR;
 
-    if (glowHitsText && Math.random() < 0.5) {
-      // Where is the glow brightest ON the text? Clamp lightX to text bounds.
-      const brightestX = Math.max(textL, Math.min(textR, lightX));
-      spawnParticle(brightestX, lightY);
+    if (lightOverText && Math.random() < 0.5) {
+      spawnParticle(lightX, lightY);
     }
 
     tickParticles();
