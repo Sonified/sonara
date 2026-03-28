@@ -126,7 +126,7 @@
         vy: Math.sin(angle) * speed,
         life: 1,
         decay: 0.006 + Math.random() * 0.012,
-        size: 0.5 + Math.random() * 1.5
+        size: 1.5 + Math.random() * 3
       });
     }
 
@@ -145,7 +145,7 @@
   function drawParticles(c) {
     c.globalCompositeOperation = 'screen';
     for (const p of particles) {
-      const alpha = p.life * 0.35;
+      const alpha = p.life * 0.28;
       c.globalAlpha = alpha;
       c.fillStyle = `rgba(255, 230, 170, 1)`;
       c.beginPath();
