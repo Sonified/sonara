@@ -87,7 +87,7 @@
 
     for (let i = 0; i < 40; i++) {
       const t = i / 40;
-      const scale = 1 + t * 0.2;
+      const scale = 1 + t * 0.12;
       const alpha = (1 - t) * 0.085 * breath;
 
       ctx.globalAlpha = alpha;
