@@ -44,7 +44,7 @@
 
     // Light sweeps fully left to right across all letters
     const lightProgress = (Math.sin(time * 0.35) + 1) / 2;
-    const lightX = textL - textW * 0.1 + lightProgress * textW * 1.2;
+    const lightX = textL - textW * 0.3 + lightProgress * textW * 1.6;
     const lightY = textCY;
     const breath = 0.7 + 0.2 * Math.sin(time * 1.5);
 
@@ -68,7 +68,7 @@
 
     // Mask to tight spotlight around light position
     oc.globalCompositeOperation = 'destination-in';
-    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 0.22);
+    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 0.3);
     mask.addColorStop(0, 'rgba(255,255,255,1)');
     mask.addColorStop(0.5, 'rgba(255,255,255,0.6)');
     mask.addColorStop(1, 'rgba(255,255,255,0)');
