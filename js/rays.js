@@ -44,7 +44,7 @@
 
     // Light sweeps fully left to right across all letters
     const lightProgress = (Math.cos(Math.PI + time * 0.35) + 1) / 2;
-    const lightX = textL - textW * 0.4 + lightProgress * textW * 1.8;
+    const lightX = textL - textW * 0.15 + lightProgress * textW * 1.3;
     const lightY = textCY;
     const breath = 0.7 + 0.2 * Math.sin(time * 1.5);
 
