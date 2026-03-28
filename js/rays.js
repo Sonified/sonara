@@ -110,7 +110,7 @@
     // Spawn particles where the glow is actually VISIBLE on the text
     // The glow mask extends textW*1.0 from lightX, so the visible hotspot on the text is:
     const glowVisibleX = Math.max(textL, Math.min(textL + textW, lightX));
-    const glowOnText = sweeping && (lightX + textW * 0.8 >= textL) && (lightX - textW * 0.8 <= textL + textW);
+    const glowOnText = (cycle < 0.6) && (lightX + textW * 0.8 >= textL) && (lightX - textW * 0.8 <= textL + textW);
     updateParticles(glowVisibleX, lightY, glowOnText ? 0.8 : 0, textW);
     drawParticles(ctx);
 
