@@ -68,7 +68,7 @@
 
     // Mask to tight spotlight around light position
     oc.globalCompositeOperation = 'destination-in';
-    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 0.7);
+    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 1.0);
     mask.addColorStop(0, 'rgba(255,255,255,1)');
     mask.addColorStop(0.15, 'rgba(255,255,255,0.8)');
     mask.addColorStop(0.35, 'rgba(255,255,255,0.4)');
