@@ -43,8 +43,8 @@
     const textL = spanRect.left - canvasRect.left;
 
     // Light sweeps fully left to right across all letters
-    const lightProgress = (Math.sin(time * 0.35) + 1) / 2;
-    const lightX = textL - textW * 0.3 + lightProgress * textW * 1.6;
+    const lightProgress = (Math.cos(Math.PI + time * 0.35) + 1) / 2;
+    const lightX = textL - textW * 0.4 + lightProgress * textW * 1.8;
     const lightY = textCY;
     const breath = 0.7 + 0.2 * Math.sin(time * 1.5);
 
