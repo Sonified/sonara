@@ -59,14 +59,7 @@
     oc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
     oc.textBaseline = 'middle';
     oc.letterSpacing = style.letterSpacing;
-    // Use a narrow gradient so only letters near the light source glow
-    const grad = oc.createLinearGradient(lightX - textW * 0.15, 0, lightX + textW * 0.15, 0);
-    grad.addColorStop(0, 'rgba(255, 225, 150, 0)');
-    grad.addColorStop(0.3, `rgba(255, 225, 150, ${breath * 0.8})`);
-    grad.addColorStop(0.5, `rgba(255, 235, 180, ${breath})`);
-    grad.addColorStop(0.7, `rgba(255, 225, 150, ${breath * 0.8})`);
-    grad.addColorStop(1, 'rgba(255, 225, 150, 0)');
-    oc.fillStyle = grad;
+    oc.fillStyle = `rgba(255, 225, 150, ${breath * 0.8})`;
     
     // Measure what canvas thinks the width is
     const measured = oc.measureText('SONARA');
@@ -83,6 +76,16 @@
     oc.textAlign = 'left';
     oc.fillText('SONARA', 0, 0);
     oc.restore();
+    
+    // Mask: only keep the area near the light source
+    oc.globalCompositeOperation = 'destination-in';
+    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 0.25);
+    mask.addColorStop(0, 'rgba(255,255,255,1)');
+    mask.addColorStop(0.6, 'rgba(255,255,255,0.5)');
+    mask.addColorStop(1, 'rgba(255,255,255,0)');
+    oc.fillStyle = mask;
+    oc.fillRect(0, 0, w, h);
+    oc.globalCompositeOperation = 'source-over';
 
     // Step 2: Radial zoom blur from light position — many small passes for smooth rays
     const numPasses = 60;
