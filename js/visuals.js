@@ -3,7 +3,7 @@
  * Hero particle field, citizen science waveform, dome starfield, synth wave.
  */
 
-let mouseX = 0, mouseY = 0;
+let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
 document.addEventListener('mousemove', (e) => {
   mouseX = e.clientX;
   mouseY = e.clientY;
