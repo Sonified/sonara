@@ -93,9 +93,13 @@ function initHeroCanvas() {
       const dmy = mouseY * scaleY - p.y;
       const mdist = Math.sqrt(dmx * dmx + dmy * dmy);
       if (mdist < 400) {
-        const force = (1 - mdist / 400) * 0.0006;
-        p.vx += dmx * force;
-        p.vy += dmy * force;
+        const force = (1 - mdist / 400) * 0.0005;
+        // Tangential component for swirl
+        const tx = -dmy;
+        const ty = dmx;
+        const swirl = (1 - mdist / 400) * 0.0004;
+        p.vx += dmx * force + tx * swirl;
+        p.vy += dmy * force + ty * swirl;
       }
 
       p.vx *= 0.985;
