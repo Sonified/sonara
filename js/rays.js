@@ -117,7 +117,7 @@
     // Spawn new particles near the light
     if (intensity > 0.3 && particles.length < MAX_PARTICLES && Math.random() < 0.3) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = 0.4 + Math.random() * 1.5;
+      const speed = 0.8 + Math.random() * 2.5;
       particles.push({
         x: lx,
         y: ly,
