@@ -58,7 +58,7 @@
     oc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
     oc.textBaseline = 'middle';
     oc.letterSpacing = style.letterSpacing;
-    oc.fillStyle = `rgba(255, 225, 150, 1)`;
+    oc.fillStyle = `rgba(255, 245, 235, 1)`;
 
     const measured = oc.measureText('SONARA');
     const scaleX = spanRect.width / measured.width;
@@ -88,7 +88,7 @@
     for (let i = 0; i < 40; i++) {
       const t = i / 40;
       const scale = 1 + t * 0.2;
-      const alpha = (1 - t) * 0.1 * breath;
+      const alpha = (1 - t) * 0.085 * breath;
 
       ctx.globalAlpha = alpha;
       ctx.save();
