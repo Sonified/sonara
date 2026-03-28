@@ -325,17 +325,23 @@ a:hover { opacity: 0.7; }
 
 .scroll-hint span {
   font-family: var(--font-mono);
-  font-size: 0.65rem;
+  font-size: 0.9rem;
   color: var(--text-muted);
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  animation: hintPulse 2.5s ease-in-out infinite;
 }
 
 .scroll-arrow {
-  width: 1px;
-  height: 36px;
+  width: 2px;
+  height: 48px;
   background: linear-gradient(to bottom, var(--text-muted), transparent);
   animation: scrollPulse 2s ease-in-out infinite;
+}
+
+@keyframes hintPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 
 /* ===== 2. VISION ===== */
