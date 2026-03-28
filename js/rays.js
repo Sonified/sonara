@@ -102,7 +102,57 @@
     ctx.globalAlpha = 1.0;
     ctx.globalCompositeOperation = 'source-over';
 
+    // Sparkle particles near the light source
+    updateParticles(lightX, lightY, breath, textW);
+    drawParticles(ctx);
+
     requestAnimationFrame(draw);
+  }
+
+  // --- Particle system ---
+  const particles = [];
+  const MAX_PARTICLES = 30;
+
+  function updateParticles(lx, ly, intensity, tw) {
+    // Spawn new particles near the light
+    if (intensity > 0.3 && particles.length < MAX_PARTICLES && Math.random() < 0.4) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.3 + Math.random() * 1.2;
+      particles.push({
+        x: lx + (Math.random() - 0.5) * tw * 0.15,
+        y: ly + (Math.random() - 0.5) * 40,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 0.5, // drift upward
+        life: 1,
+        decay: 0.008 + Math.random() * 0.015,
+        size: 1 + Math.random() * 2
+      });
+    }
+
+    // Update
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= p.decay;
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+      }
+    }
+  }
+
+  function drawParticles(c) {
+    c.globalCompositeOperation = 'screen';
+    for (const p of particles) {
+      const alpha = p.life * 0.6;
+      c.globalAlpha = alpha;
+      c.fillStyle = `rgba(255, 230, 170, 1)`;
+      c.beginPath();
+      c.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      c.fill();
+    }
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
   }
 
   window.addEventListener('resize', resize);
