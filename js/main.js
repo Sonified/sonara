@@ -73,6 +73,13 @@ import { initVisuals } from './visuals.js';
         if (entry.target.id === 'citizen-science') {
           animateCounters(entry.target);
         }
+
+        // Hide cursor glow on STEM + Music and Get Involved sections
+        if (entry.target.id === 'stem-music' || entry.target.id === 'contact') {
+          cursorGlow.style.opacity = '0';
+        } else {
+          cursorGlow.style.opacity = '1';
+        }
       } else {
         entry.target.classList.remove('in-view');
       }

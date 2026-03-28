@@ -27,6 +27,7 @@
 }
 
 html {
+  overscroll-behavior: none;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
@@ -73,6 +74,35 @@ a:hover { opacity: 0.7; }
   justify-content: center;
   overflow: hidden;
   scroll-snap-align: start;
+}
+
+.section::before,
+.section::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 15vh;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.section::before {
+  top: 0;
+  background: linear-gradient(to bottom, var(--bg), transparent);
+}
+
+.section::after {
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg), transparent);
+}
+
+#hero::before {
+  display: none;
+}
+
+#contact::after {
+  display: none;
 }
 
 .section-label {
@@ -604,6 +634,15 @@ a:hover { opacity: 0.7; }
 #stem-music {
   flex-direction: column;
   padding: 3rem 2rem;
+}
+
+#spectrum-canvas,
+#globe-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
 }
 
 .music-bg {
@@ -1329,6 +1368,8 @@ footer {
   flex-direction: column;
   align-items: center;
   gap: 2rem;
+  margin-top: -10vh;
+  pointer-events: none;
   opacity: 0;
   transform: translateY(40px);
   transition: opacity 0.9s ease, transform 0.9s ease;
@@ -1363,10 +1404,11 @@ footer {
 }
 
 .contact-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 1.5rem;
+  pointer-events: auto;
 }
 
 .contact-card h3 {
@@ -1407,6 +1449,7 @@ footer {
   font-size: 0.85rem;
   letter-spacing: 0.06em;
   transition: background 0.3s ease, color 0.3s ease;
+  pointer-events: auto;
 }
 
 .contact-btn:hover {
