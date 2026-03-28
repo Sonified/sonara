@@ -52,16 +52,23 @@
     // Breathing intensity
     const breath = 0.5 + 0.3 * Math.sin(time * 1.2);
 
-    // Step 1: Draw bright text on offscreen
+    // Step 1: Draw bright text on offscreen, character by character to match CSS spacing
     oc.clearRect(0, 0, w, h);
-    oc.font = `${style.fontWeight} ${parseFloat(style.fontSize)}px ${style.fontFamily}`;
-    if (style.letterSpacing && style.letterSpacing !== 'normal') {
-      oc.letterSpacing = style.letterSpacing;
-    }
-    oc.textAlign = 'center';
+    const fontSize = parseFloat(style.fontSize);
+    oc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+    oc.textAlign = 'left';
     oc.textBaseline = 'middle';
     oc.fillStyle = `rgba(255, 225, 150, ${breath * 0.7})`;
-    oc.fillText('SONARA', textCX, textCY);
+
+    // Draw each character at its actual DOM position
+    const chars = span.textContent.trim();
+    // Use a temporary span to measure each character position
+    const textLeft = spanRect.left - canvasRect.left;
+    const charWidth = spanRect.width / chars.length;
+    for (let i = 0; i < chars.length; i++) {
+      const cx = textLeft + charWidth * i + charWidth * 0.15;
+      oc.fillText(chars[i], cx, textCY);
+    }
 
     // Step 2: Radial zoom blur from light position
     const numPasses = 25;
