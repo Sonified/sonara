@@ -170,36 +170,58 @@ a:hover { opacity: 0.7; }
 .hero-title .glow-wrap {
   display: inline-block;
   position: relative;
-  background: linear-gradient(
-    90deg,
-    rgba(180, 170, 150, 0.7) 0%,
-    rgba(180, 170, 150, 0.7) 30%,
-    rgba(255, 235, 180, 1) 48%,
-    rgba(255, 245, 210, 1) 50%,
-    rgba(255, 235, 180, 1) 52%,
-    rgba(180, 170, 150, 0.7) 70%,
-    rgba(180, 170, 150, 0.7) 100%
-  );
-  background-size: 300% 100%;
-  background-position: 100% 0;
+  background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: lightSweep 6s ease-in-out infinite 2s;
 }
 
-@keyframes lightSweep {
-  0% {
-    background-position: 100% 0;
+/* Rays of light behind the letters */
+.hero-title .glow-wrap::before {
+  content: 'SONARA';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  color: rgba(196, 163, 90, 0.6);
+  filter: blur(8px);
+  animation: raysBreath 8s ease-in-out infinite 2s;
+}
+
+/* Secondary larger glow for far rays */
+.hero-title .glow-wrap::after {
+  content: 'SONARA';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -2;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  color: rgba(196, 163, 90, 0.25);
+  filter: blur(30px);
+  animation: raysBreath 8s ease-in-out infinite 2s;
+}
+
+@keyframes raysBreath {
+  0%, 100% {
+    opacity: 0.15;
+    filter: blur(8px);
+    transform: scale(1);
   }
-  40% {
-    background-position: 0% 0;
-  }
-  60% {
-    background-position: 0% 0;
-  }
-  100% {
-    background-position: 100% 0;
+  50% {
+    opacity: 1;
+    filter: blur(15px);
+    transform: scale(1.02);
   }
 }
 
