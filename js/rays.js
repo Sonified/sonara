@@ -151,9 +151,6 @@
     // --- Particles: spawn where the GLOW is visible, which is where ---
     // --- the radial mask overlaps the text area ---
     // The glow is brightest at lightX. It hits the text when lightX is within
-    // [textL - glowRadius, textR + glowRadius]. The visible spot ON the text
-    // is clamped to [textL, textR].
-    const glowRadius = textW * 0.6; // effective visible radius (inner bright part)
     const glowRadius = textW * 0.6;
     const glowHitsText = sweeping && breath > 0.1 &&
       lightX + glowRadius > textL && lightX - glowRadius < textR;
