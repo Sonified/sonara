@@ -116,7 +116,7 @@
 
   function updateParticles(lx, ly, intensity, tw) {
     // Spawn new particles near the light
-    if (intensity > 0.3 && particles.length < MAX_PARTICLES && Math.random() < 0.3) {
+    if (intensity > 0.1 && particles.length < MAX_PARTICLES && Math.random() < 0.5) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.3 + Math.random() * 1.0;
       particles.push({
@@ -125,7 +125,7 @@
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         life: 1,
-        decay: 0.006 + Math.random() * 0.012,
+        decay: 0.015 + Math.random() * 0.025,
         size: 1.5 + Math.random() * 3
       });
     }
