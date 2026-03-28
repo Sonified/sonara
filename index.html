@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SONARA | Sounds of NASA: Research Activated</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="cursor-glow"></div>
+
+  <!-- ===== 1. HERO ===== -->
+  <section id="hero" class="section" data-sound="hero">
+    <canvas id="hero-canvas"></canvas>
+    <div class="hero-inner">
+      <div class="hero-badge">NASA Science Activation</div>
+      <h1 class="hero-title">SONARA</h1>
+      <p class="hero-expansion">Sounds of NASA: Research Activated</p>
+      <p class="hero-tagline">Turning satellite data into sound. Turning listeners into scientists.</p>
+      <button class="listen-btn sound-trigger" aria-label="Listen to the solar wind">
+        <span class="listen-ring"></span>
+        <span class="listen-ring ring-2"></span>
+        <span class="listen-icon">
+          <svg width="18" height="20" viewBox="0 0 18 20" fill="none"><path d="M2 3.5L16 10L2 16.5V3.5Z" fill="currentColor"/></svg>
+        </span>
+        <span class="listen-text">Listen to the solar wind</span>
+      </button>
+    </div>
+    <div class="scroll-hint">
+      <span>Scroll to explore</span>
+      <div class="scroll-arrow"></div>
+    </div>
+  </section>
+
+  <!-- ===== 2. THE VISION ===== -->
+  <section id="vision" class="section">
+    <div class="vision-bg"></div>
+    <div class="vision-content">
+      <div class="vision-center">
+        <div class="section-label">The Vision</div>
+        <h2 class="vision-headline">What if the universe<br>already had a soundtrack?</h2>
+        <p class="vision-body">NASA satellites record the electromagnetic signatures of the sun, solar wind, and Earth's magnetosphere every second. SONARA transforms that data into sound, unlocking three powerful pathways: citizen science, creative collaboration, and immersive education.</p>
+      </div>
+      <div class="curiosity-cascade">
+        <div class="cascade-step" data-step="1">
+          <div class="cascade-icon">🎵</div>
+          <p>A producer downloads a sample pack. Uses a coronal mass ejection as a kick drum.</p>
+        </div>
+        <div class="cascade-arrow">→</div>
+        <div class="cascade-step" data-step="2">
+          <div class="cascade-icon">🤔</div>
+          <p>"Wait, what <em>is</em> a coronal mass ejection?"</p>
+        </div>
+        <div class="cascade-arrow">→</div>
+        <div class="cascade-step" data-step="3">
+          <div class="cascade-icon">🔬</div>
+          <p>They discover heliophysics. They join a citizen science project. They contribute to a published paper.</p>
+        </div>
+      </div>
+      <div class="cascade-label">The Curiosity Cascade</div>
+    </div>
+  </section>
+
+  <!-- ===== 3. GOAL 1: CITIZEN SCIENCE ===== -->
+  <section id="citizen-science" class="section" data-sound="citizen-science">
+    <canvas id="cs-canvas"></canvas>
+    <div class="cs-content">
+      <div class="cs-left">
+        <div class="section-label">Goal 1</div>
+        <h2 class="cs-title">Citizen Science</h2>
+        <p class="cs-body">Volunteers listen to audified NASA satellite data and identify wave features that matter to real heliophysics research. No prior expertise required. Just ears, curiosity, and a few minutes.</p>
+        <p class="cs-body">Through our study builder platform, researchers design listening experiments. Volunteers contribute classifications. The data feeds directly into peer-reviewed science.</p>
+        <button class="sound-trigger cs-listen" data-target="citizen-science" aria-label="Hear a discovery">
+          <span class="sound-icon"></span>
+          <span>Hear a discovery</span>
+        </button>
+      </div>
+      <div class="cs-right">
+        <div class="cs-stats-block">
+          <div class="cs-stat">
+            <span class="cs-stat-number" data-count="1900">0</span>
+            <span class="cs-stat-plus">+</span>
+            <span class="cs-stat-label">Citizen science volunteers</span>
+          </div>
+          <div class="cs-stat">
+            <span class="cs-stat-number" data-count="18000">0</span>
+            <span class="cs-stat-plus">+</span>
+            <span class="cs-stat-label">Feature identifications</span>
+          </div>
+          <div class="cs-stat-paper">
+            <span class="cs-paper-title">"Inverted radial Alfven continua"</span>
+            <span class="cs-paper-journal">Published in Frontiers in Astronomy & Space Sciences, 2026</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 4. GOAL 2: STEM-MUSIC ===== -->
+  <section id="stem-music" class="section" data-sound="stem-music">
+    <div class="music-bg"></div>
+    <div class="music-content">
+      <div class="music-header">
+        <div class="section-label">Goal 2</div>
+        <h2 class="music-title">STEM + Music</h2>
+        <p class="music-subtitle">Building creative instruments from NASA data</p>
+      </div>
+      <div class="instruments-grid">
+        <div class="instrument-card">
+          <div class="instrument-visual sequencer-visual">
+            <div class="seq-grid">
+              <div class="seq-cell active"></div><div class="seq-cell"></div><div class="seq-cell active"></div><div class="seq-cell"></div>
+              <div class="seq-cell"></div><div class="seq-cell active"></div><div class="seq-cell"></div><div class="seq-cell active"></div>
+              <div class="seq-cell active"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell active"></div>
+              <div class="seq-cell"></div><div class="seq-cell active"></div><div class="seq-cell active"></div><div class="seq-cell"></div>
+            </div>
+          </div>
+          <h3>SONARA Sequencer</h3>
+          <p>Web-based rhythmic pattern builder using audified heliophysics data as source material.</p>
+        </div>
+        <div class="instrument-card">
+          <div class="instrument-visual synth-visual">
+            <canvas id="synth-wave-canvas"></canvas>
+          </div>
+          <h3>SONARA Synth</h3>
+          <p>Wavetable synthesizer that loads audified satellite data as oscillator sources. Play the magnetosphere.</p>
+        </div>
+        <div class="instrument-card">
+          <div class="instrument-visual catalog-visual">
+            <div class="catalog-rows">
+              <div class="catalog-row"><span class="cat-dot"></span><span>CME Impact // Jan 2025</span></div>
+              <div class="catalog-row"><span class="cat-dot"></span><span>Alfven Wave Cluster</span></div>
+              <div class="catalog-row"><span class="cat-dot"></span><span>Magnetopause Crossing</span></div>
+              <div class="catalog-row"><span class="cat-dot"></span><span>Bow Shock Oscillation</span></div>
+            </div>
+          </div>
+          <h3>Music Catalog</h3>
+          <p>Sample packs curated by researchers. Annual remix competitions. A growing library of space-sound.</p>
+        </div>
+      </div>
+      <div class="music-evidence">
+        <div class="evidence-stat">
+          <span class="evidence-number">100M+</span>
+          <span class="evidence-label">streams on prior collaboration</span>
+        </div>
+        <div class="evidence-stat">
+          <span class="evidence-number">113</span>
+          <span class="evidence-label">countries reached</span>
+        </div>
+        <div class="evidence-stat">
+          <span class="evidence-number">4+</span>
+          <span class="evidence-label">university workshops</span>
+        </div>
+      </div>
+      <button class="sound-trigger music-listen" aria-label="Play a space instrument">
+        <span class="sound-icon"></span>
+        <span>Play a space instrument</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ===== 5. GOAL 3: PLANETARIUM ===== -->
+  <section id="planetarium" class="section" data-sound="planetarium">
+    <canvas id="dome-canvas"></canvas>
+    <div class="planet-content">
+      <div class="planet-center">
+        <div class="section-label">Goal 3</div>
+        <h2 class="planet-title">Planetarium Shows</h2>
+        <p class="planet-body">Immersive audification-infused experiences inside planetarium domes. Multi-channel spatial audio powered by OpenSpace software, where visitors don't just see the cosmos. They hear it.</p>
+      </div>
+      <div class="planet-details">
+        <div class="planet-detail">
+          <span class="planet-detail-num">11.2</span>
+          <span class="planet-detail-label">Speaker System<br><small>Linkoping University, Sweden</small></span>
+        </div>
+        <div class="planet-detail">
+          <span class="planet-detail-num">26</span>
+          <span class="planet-detail-label">Summer Bridge Scholars<br><small>CU Boulder pilot program</small></span>
+        </div>
+        <div class="planet-detail">
+          <span class="planet-detail-num">360°</span>
+          <span class="planet-detail-label">Spatial Audio<br><small>Full-dome immersion</small></span>
+        </div>
+      </div>
+      <button class="sound-trigger planet-listen" aria-label="Enter the dome">
+        <span class="sound-icon"></span>
+        <span>Enter the dome</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ===== 6. THE TEAM ===== -->
+  <section id="team" class="section">
+    <div class="team-content">
+      <div class="section-label team-label">The Team</div>
+      <h2 class="team-title">Built by researchers, scientists, and artists</h2>
+      <div class="team-grid">
+        <div class="team-card featured">
+          <div class="team-avatar"><span>VW</span></div>
+          <div class="team-info">
+            <h3>Victoria Wilder</h3>
+            <span class="team-role">Principal Investigator</span>
+            <span class="team-org">CU Boulder LASP</span>
+            <p class="team-bio">Research scientist leading the SONARA vision at LASP.</p>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="team-avatar"><span>MH</span></div>
+          <div class="team-info">
+            <h3>Mike Hartinger</h3>
+            <span class="team-role">Co-Investigator</span>
+            <span class="team-org">Space Science Institute</span>
+            <p class="team-bio">HARP PI. Space physicist driving the citizen science vision.</p>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="team-avatar"><span>LB</span></div>
+          <div class="team-info">
+            <h3>Lauren Blum</h3>
+            <span class="team-role">Co-Investigator</span>
+            <span class="team-org">CU Boulder LASP</span>
+            <p class="team-bio">Space physics researcher connecting data to discovery.</p>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="team-photo">
+            <img src="headshot.jpeg" alt="Robert Alexander" loading="lazy">
+          </div>
+          <div class="team-info">
+            <h3>Robert Alexander</h3>
+            <span class="team-role">Co-Investigator</span>
+            <span class="team-org">Auralab Technologies / SSI</span>
+            <p class="team-bio">Sonification pioneer. Built NASA CDAWeb's audification system. Ph.D. Design Science.</p>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="team-avatar"><span>LD</span></div>
+          <div class="team-info">
+            <h3>Lynda Duran</h3>
+            <span class="team-role">Co-Investigator</span>
+            <span class="team-org">CU Boulder LASP</span>
+            <p class="team-bio">Engagement, assessment, and evaluation lead.</p>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="team-avatar"><span>SH</span></div>
+          <div class="team-info">
+            <h3>Shannon Hill</h3>
+            <span class="team-role">Co-Investigator</span>
+            <span class="team-org">University of Iowa</span>
+            <p class="team-bio">Expanding the reach of space science to new audiences.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 7. PARTNERS & IMPACT ===== -->
+  <section id="partners" class="section">
+    <div class="partners-content">
+      <div class="partners-top">
+        <div class="section-label">Partners & Impact</div>
+        <h2 class="partners-title">A national collaboration</h2>
+      </div>
+      <div class="partners-grid">
+        <div class="partner-logo"><span>CU Boulder</span><small>LASP</small></div>
+        <div class="partner-logo"><span>Virginia Tech</span></div>
+        <div class="partner-logo"><span>Michigan State</span></div>
+        <div class="partner-logo"><span>U of Michigan</span></div>
+        <div class="partner-logo"><span>UC San Diego</span></div>
+        <div class="partner-logo"><span>Harvard-Smithsonian</span></div>
+        <div class="partner-logo"><span>UCLA</span><small>Space Institute</small></div>
+        <div class="partner-logo"><span>U of Iowa</span></div>
+        <div class="partner-logo"><span>Linkoping U</span><small>Sweden</small></div>
+        <div class="partner-logo"><span>Space Science Institute</span></div>
+      </div>
+      <div class="impact-framework">
+        <div class="mlo-grid">
+          <div class="mlo">
+            <div class="mlo-icon">✦</div>
+            <h4>Inspire</h4>
+            <p>STEM identity through creative practice</p>
+          </div>
+          <div class="mlo">
+            <div class="mlo-icon">✦</div>
+            <h4>Increase</h4>
+            <p>Participation in NASA science</p>
+          </div>
+          <div class="mlo">
+            <div class="mlo-icon">✦</div>
+            <h4>Involve</h4>
+            <p>People in hands-on NASA STEM</p>
+          </div>
+          <div class="mlo">
+            <div class="mlo-icon">✦</div>
+            <h4>Build</h4>
+            <p>Partnerships across institutions</p>
+          </div>
+        </div>
+      </div>
+      <div class="partners-closing">
+        <p>Building the infrastructure for a new relationship between music, science, and the public.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-inner">
+      <span class="footer-brand">SONARA</span>
+      <span class="footer-sub">Sounds of NASA: Research Activated</span>
+      <span class="footer-copy">&copy; 2026</span>
+    </div>
+  </footer>
+
+  <script type="module" src="js/audio.js"></script>
+  <script type="module" src="js/visuals.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
