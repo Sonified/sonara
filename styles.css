@@ -170,10 +170,26 @@ a:hover { opacity: 0.7; }
 .hero-title .glow-wrap {
   display: inline-block;
   position: relative;
-  background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent) 20%,
+    rgba(255, 240, 200, 1) 45%,
+    rgba(255, 245, 220, 1) 50%,
+    rgba(255, 240, 200, 1) 55%,
+    var(--accent) 80%,
+    var(--accent) 100%
+  );
+  background-size: 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  animation: letterShimmer 4s linear infinite;
+}
+
+@keyframes letterShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -50% 0; }
 }
 
 /* Rays canvas overlays the title — rays project FORWARD toward viewer */
