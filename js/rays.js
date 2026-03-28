@@ -41,7 +41,7 @@
 
     // Text position relative to canvas
     const textCX = (spanRect.left - canvasRect.left) + spanRect.width / 2;
-    const textCY = (spanRect.top - canvasRect.top) + spanRect.height / 2;
+    const textCY = (spanRect.top - canvasRect.top) + spanRect.height * 0.55;
     const textW = spanRect.width;
 
     // Light source sweeps left to right
