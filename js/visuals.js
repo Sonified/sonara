@@ -15,7 +15,7 @@ function initHeroCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  const PARTICLE_COUNT = 120;
+  const PARTICLE_COUNT = 240;
   let particles = [];
   let time = 0;
 
@@ -92,12 +92,13 @@ function initHeroCanvas() {
       const dmx = mouseX * scaleX - p.x;
       const dmy = mouseY * scaleY - p.y;
       const mdist = Math.sqrt(dmx * dmx + dmy * dmy);
-      if (mdist < 300) {
-        const force = (1 - mdist / 300) * 0.00015;
+      if (mdist < 350) {
+        const proximity = 1 - mdist / 350;
+        const force = proximity * 0.00012;
         // Tangential component for swirl
         const tx = -dmy;
         const ty = dmx;
-        const swirl = (1 - mdist / 300) * 0.00012;
+        const swirl = proximity * 0.00015;
         p.vx += dmx * force + tx * swirl;
         p.vy += dmy * force + ty * swirl;
       }
@@ -128,8 +129,9 @@ function initVisionCanvas() {
   let w, h;
   let time = 0;
 
-  const ORB_COUNT = 35;
+  const ORB_COUNT = 55;
   let orbs = [];
+  let mxV = 0, myV = 0; // mouse position in canvas coords
 
   function resize() {
     w = canvas.width = canvas.offsetWidth;
@@ -139,11 +141,21 @@ function initVisionCanvas() {
 
   function initOrbs() {
     orbs = [];
-    for (let i = 0; i < ORB_COUNT; i++) {
+    // Subdivide into a grid, place one orb per cell with jitter
+    const cols = Math.ceil(Math.sqrt(ORB_COUNT * (w / h)));
+    const rows = Math.ceil(ORB_COUNT / cols);
+    const cellW = w / cols;
+    const cellH = h / rows;
+    let count = 0;
+    for (let row = 0; row < rows && count < ORB_COUNT; row++) {
+      for (let col = 0; col < cols && count < ORB_COUNT; col++) {
+        count++;
       const depth = Math.random(); // 0 = far, 1 = near
+      const px = (col + 0.15 + Math.random() * 0.7) * cellW;
+      const py = (row + 0.15 + Math.random() * 0.7) * cellH;
       orbs.push({
-        x: Math.random() * w,
-        y: Math.random() * h,
+        x: px,
+        y: py,
         baseRadius: 80 + depth * 180,
         depth,
         driftX: (Math.random() - 0.5) * 0.2 * (0.3 + depth * 0.7),
@@ -155,29 +167,45 @@ function initVisionCanvas() {
         phase: Math.random() * Math.PI * 2,
         breatheSpeed: 0.15 + Math.random() * 0.3,
         life: Math.random() * Math.PI * 2, // start at random point in lifecycle
-        lifeSpeed: 0.0015 + Math.random() * 0.0025, // how fast they fade in/out
+        lifeSpeed: 0.0004 + Math.random() * 0.003, // 2x slower than original
         hue: Math.random() < 0.6
           ? 40 + Math.random() * 10   // warm gold
           : 210 + Math.random() * 20,  // cool blue
         sat: 30 + Math.random() * 40,
+        hoverBoost: 0,
       });
+      }
     }
     // Sort by depth so far orbs draw first
     orbs.sort((a, b) => a.depth - b.depth);
   }
 
+  // mxV/myV updated from global mouseX/mouseY in draw loop
+
   function draw() {
     c.clearRect(0, 0, w, h);
     time += 0.003;
+
+    // Convert global mouse to canvas-local coords
+    const rect = canvas.getBoundingClientRect();
+    mxV = mouseX - rect.left;
+    myV = mouseY - rect.top;
 
     orbs.forEach(orb => {
       // Lifecycle: smooth fade in and out
       orb.life += orb.lifeSpeed;
       const lifecycle = Math.max(0, Math.sin(orb.life)); // 0 → 1 → 0, clamped
 
+      // Mouse proximity → hover boost (lerped)
+      const dx = orb.x - mxV, dy = orb.y - myV;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const hoverRadius = Math.max(w, h) * 0.3;
+      const hoverTarget = dist < hoverRadius ? Math.max(0, 1 - dist / hoverRadius) : 0;
+      orb.hoverBoost += (hoverTarget - orb.hoverBoost) * 0.04;
+
       const breathe = Math.sin(time * orb.breatheSpeed + orb.phase) * 0.2 + 0.8;
       const radius = orb.baseRadius * breathe;
-      const alpha = (0.04 + orb.depth * 0.08) * breathe * lifecycle;
+      const alpha = (0.08 + orb.depth * 0.14) * breathe * lifecycle * (1 + orb.hoverBoost * 2.5);
 
       const grad = c.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, radius);
       grad.addColorStop(0, `hsla(${orb.hue}, ${orb.sat}%, 65%, ${alpha})`);
@@ -234,7 +262,7 @@ function initCSCanvas() {
 
   function draw() {
     c.clearRect(0, 0, w, h);
-    time += 0.008;
+    time += 0.0053;
 
     const centerY = h / 2;
     const amplitude = h * 0.15;
@@ -386,7 +414,7 @@ function initSynthWave() {
 
   function draw() {
     c.clearRect(0, 0, w, h);
-    time += 0.015;
+    time += 0.011;
 
     const centerY = h / 2;
     const amp = h * 0.25;
@@ -648,7 +676,7 @@ function initGlobeCanvas() {
     }
 
     // Draw latitude rings
-    c.lineWidth = 0.8;
+    c.lineWidth = 1.2;
     for (let lat = -5; lat <= 5; lat++) {
       const latY = lat / 6;
       const ringR = Math.sqrt(1 - latY * latY);
@@ -661,12 +689,12 @@ function initGlobeCanvas() {
         if (!drawing) { c.moveTo(p.sx, p.sy); drawing = true; }
         else c.lineTo(p.sx, p.sy);
       }
-      c.strokeStyle = 'rgba(212, 168, 67, 0.12)';
+      c.strokeStyle = 'rgba(212, 168, 67, 0.15)';
       c.stroke();
     }
 
     // Draw longitude rings
-    c.lineWidth = 0.8;
+    c.lineWidth = 1.2;
     for (let lon = 0; lon < 8; lon++) {
       const lonA = (lon / 8) * Math.PI;
       let drawing = false;
@@ -681,7 +709,7 @@ function initGlobeCanvas() {
         if (!drawing) { c.moveTo(p.sx, p.sy); drawing = true; }
         else c.lineTo(p.sx, p.sy);
       }
-      c.strokeStyle = 'rgba(212, 168, 67, 0.09)';
+      c.strokeStyle = 'rgba(212, 168, 67, 0.11)';
       c.stroke();
     }
 

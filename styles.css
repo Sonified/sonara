@@ -1368,7 +1368,7 @@ footer {
   flex-direction: column;
   align-items: center;
   gap: 2rem;
-  margin-top: -10vh;
+  margin-top: -1vh;
   pointer-events: none;
   opacity: 0;
   transform: translateY(40px);
@@ -1392,7 +1392,7 @@ footer {
   text-align: center;
   color: var(--text-dim);
   line-height: 1.7;
-  max-width: 700px;
+  max-width: 800px;
 }
 
 .contact-offerings {
@@ -1404,8 +1404,8 @@ footer {
 }
 
 .contact-card {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 26, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
   padding: 1.5rem;
   pointer-events: auto;
@@ -1426,7 +1426,7 @@ footer {
 
 .contact-cta {
   text-align: center;
-  margin-top: 1.5rem;
+  margin-top: 2rem;
   display: flex;
   flex-direction: column;
   align-items: center;

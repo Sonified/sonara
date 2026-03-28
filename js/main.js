@@ -74,8 +74,8 @@ import { initVisuals } from './visuals.js';
           animateCounters(entry.target);
         }
 
-        // Hide cursor glow on STEM + Music and Get Involved sections
-        if (entry.target.id === 'stem-music' || entry.target.id === 'contact') {
+        // Hide cursor glow on sections with their own mouse interaction
+        if (entry.target.id === 'vision' || entry.target.id === 'stem-music' || entry.target.id === 'contact') {
           cursorGlow.style.opacity = '0';
         } else {
           cursorGlow.style.opacity = '1';
