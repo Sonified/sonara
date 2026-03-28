@@ -176,36 +176,19 @@ a:hover { opacity: 0.7; }
   -webkit-text-fill-color: transparent;
 }
 
-/* Light source behind text — radial glow that breathes */
-.hero-title .glow-wrap::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 120%;
-  height: 200%;
-  transform: translate(-50%, -50%);
-  z-index: -1;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(196, 163, 90, 0.35) 0%,
-    rgba(196, 163, 90, 0.15) 25%,
-    rgba(196, 163, 90, 0.05) 50%,
-    transparent 70%
-  );
-  animation: raysBreath 8s ease-in-out infinite 2s;
-  pointer-events: none;
+/* Rays canvas overlays the title area */
+.hero-title {
+  position: relative;
 }
 
-@keyframes raysBreath {
-  0%, 100% {
-    opacity: 0.2;
-    transform: translate(-50%, -50%) scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1.15);
-  }
+#rays-canvas {
+  position: absolute;
+  top: -50%;
+  left: -10%;
+  width: 120%;
+  height: 200%;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .hero-expansion {
