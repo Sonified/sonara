@@ -36,15 +36,17 @@
   const particles = [];
 
   function spawnParticle(x, y) {
-    if (particles.length > 50) return;
+    if (particles.length > 100) return;
     const angle = Math.random() * Math.PI * 2;
-    const speed = 0.08 + Math.random() * 0.2;
+    const speed = 0.03 + Math.random() * 0.08;
     particles.push({
       x: x + (Math.random() - 0.5) * 320,
       y: y + (Math.random() - 0.5) * 320,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       life: 1,
+      age: 0,
+      fadeIn: 80 + Math.random() * 80,
       decay: 0.0025 + Math.random() * 0.005,
       size: 0.8 + Math.random() * 1.2
     });
@@ -55,6 +57,7 @@
       const p = particles[i];
       p.x += p.vx;
       p.y += p.vy;
+      p.age++;
       p.life -= p.decay;
       if (p.life <= 0) particles.splice(i, 1);
     }
@@ -84,7 +87,8 @@
 
     // Draw particles
     for (const p of particles) {
-      let alpha = p.life * 0.25;
+      const fadeInMult = Math.min(1, p.age / p.fadeIn);
+      let alpha = p.life * 0.25 * fadeInMult;
       if (p.x > textR - fadeZone) {
         alpha *= Math.max(0, (textR - p.x) / fadeZone);
       }
@@ -120,7 +124,7 @@
     const lightProgress = sweeping ? cycle / 0.6 : 1;
 
     // Light position: sweeps across the text bounds with a small margin
-    const lightX = textL - textW * 0.12 + lightProgress * textW * 1.07;
+    const lightX = textL - textW * 0.2 + lightProgress * textW * 1.07;
     const lightY = textCY;
 
     // --- Breath: fade in at start, fade out at end + during pause ---
@@ -185,7 +189,7 @@
     }
 
     tickParticles();
-    drawParticles(textR, textW * 0.15);
+    drawParticles(textR, textW * 0.35);
 
     requestAnimationFrame(draw);
   }
