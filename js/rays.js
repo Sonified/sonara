@@ -103,11 +103,9 @@
     ctx.globalCompositeOperation = 'source-over';
 
     // Sparkle particles only when light is over the letters
-    // Sparkle position = where the glow actually appears on the letters
-    // The glow mask is centered on lightX, so visible glow center ≈ max(lightX, textL)
-    const glowCenter = Math.max(lightX, textL);
-    const overLetters = glowCenter >= textL && glowCenter <= textL + textW;
-    updateParticles(glowCenter, lightY, overLetters ? 0.8 : 0, textW);
+    // Only sparkle when light is actually over the letters
+    const overLetters = lightX >= textL && lightX <= textL + textW;
+    updateParticles(lightX, lightY, overLetters ? 0.8 : 0, textW);
     drawParticles(ctx);
 
     requestAnimationFrame(draw);
