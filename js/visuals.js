@@ -92,13 +92,14 @@ function initHeroCanvas() {
       const dmx = mouseX * scaleX - p.x;
       const dmy = mouseY * scaleY - p.y;
       const mdist = Math.sqrt(dmx * dmx + dmy * dmy);
-      if (mdist < 250) {
-        p.vx += dmx * 0.00004;
-        p.vy += dmy * 0.00004;
+      if (mdist < 400) {
+        const force = (1 - mdist / 400) * 0.0006;
+        p.vx += dmx * force;
+        p.vy += dmy * force;
       }
 
-      p.vx *= 0.998;
-      p.vy *= 0.998;
+      p.vx *= 0.985;
+      p.vy *= 0.985;
 
       if (p.x < 0) p.x = w;
       if (p.x > w) p.x = 0;
