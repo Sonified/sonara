@@ -115,17 +115,17 @@
 
   function updateParticles(lx, ly, intensity, tw) {
     // Spawn new particles near the light
-    if (intensity > 0.3 && particles.length < MAX_PARTICLES && Math.random() < 0.4) {
+    if (intensity > 0.3 && particles.length < MAX_PARTICLES && Math.random() < 0.3) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = 0.3 + Math.random() * 1.2;
+      const speed = 0.4 + Math.random() * 1.5;
       particles.push({
-        x: lx + (Math.random() - 0.5) * tw * 0.15,
-        y: ly + (Math.random() - 0.5) * 40,
+        x: lx,
+        y: ly,
         vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 0.5, // drift upward
+        vy: Math.sin(angle) * speed,
         life: 1,
-        decay: 0.008 + Math.random() * 0.015,
-        size: 1 + Math.random() * 2
+        decay: 0.006 + Math.random() * 0.012,
+        size: 0.5 + Math.random() * 1.5
       });
     }
 
@@ -144,7 +144,7 @@
   function drawParticles(c) {
     c.globalCompositeOperation = 'screen';
     for (const p of particles) {
-      const alpha = p.life * 0.6;
+      const alpha = p.life * 0.35;
       c.globalAlpha = alpha;
       c.fillStyle = `rgba(255, 230, 170, 1)`;
       c.beginPath();
