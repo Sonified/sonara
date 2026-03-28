@@ -3,27 +3,182 @@
  * Hero particle field, citizen science waveform, dome starfield, synth wave.
  */
 
+import { getStemAnalyser, getHeroAnalyser } from './audio.js?v=5';
+
 let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
 document.addEventListener('mousemove', (e) => {
   mouseX = e.clientX;
   mouseY = e.clientY;
 });
 
-// ===== Hero: Audio-reactive particle constellation =====
+// Shared visibility tracker — returns { visible, wasHidden } per section
+function trackVisibility(sectionId) {
+  const state = { visible: sectionId === 'hero', firstReveal: true };
+  const el = document.getElementById(sectionId);
+  if (!el) return state;
+  const obs = new IntersectionObserver(([entry]) => {
+    state.visible = entry.isIntersecting;
+  }, { threshold: 0 });
+  obs.observe(el);
+  return state;
+}
+
+// ===== Hero: Audio-reactive particle constellation (WebGL) =====
 function initHeroCanvas() {
   const canvas = document.getElementById('hero-canvas');
   if (!canvas) return;
-  const c = canvas.getContext('2d');
+
+  // Try WebGL first, fall back to Canvas 2D
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false });
+  if (!gl) return initHeroCanvas2D();
+
   let w, h;
   const PARTICLE_COUNT = 240;
+  const MAX_PARTICLES = 5000;
   let particles = [];
   let time = 0;
+  const heroVis = trackVisibility('hero');
+  let heroAudioPlaying = false;
+  let audioIntensity = 0;
+  const heroRmsData = new Uint8Array(128);
+  let rmsSmooth = 0;
+  let lastRippleTime = 0;
+  const listenBtn = document.querySelector('#hero .listen-btn');
+
+  function spawnRipple() {
+    if (!listenBtn) return;
+    const ring = document.createElement('span');
+    ring.className = 'listen-ring';
+    ring.style.animation = 'ripple 1.6s ease-out forwards';
+    listenBtn.appendChild(ring);
+    ring.addEventListener('animationend', () => ring.remove());
+  }
+  if (listenBtn) {
+    const mo = new MutationObserver(() => {
+      heroAudioPlaying = listenBtn.classList.contains('playing');
+    });
+    mo.observe(listenBtn, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  // --- Shader sources ---
+  const PARTICLE_VS = `
+    attribute vec2 a_position;
+    attribute float a_size;
+    attribute float a_alpha;
+    uniform vec2 u_resolution;
+    varying float v_alpha;
+    void main() {
+      vec2 clip = (a_position / u_resolution) * 2.0 - 1.0;
+      clip.y = -clip.y;
+      gl_Position = vec4(clip, 0.0, 1.0);
+      gl_PointSize = a_size;
+      v_alpha = a_alpha;
+    }`;
+
+  const PARTICLE_FS = `
+    precision mediump float;
+    varying float v_alpha;
+    uniform float u_glowAlpha;
+    void main() {
+      vec2 center = gl_PointCoord - 0.5;
+      float dist = length(center) * 2.0;
+      if (dist > 1.0) discard;
+      float coreFrac = 0.333;
+      float coreAlpha = 1.0 - smoothstep(coreFrac - 0.06, coreFrac + 0.06, dist);
+      float glowDist = max(0.0, dist - coreFrac) / (1.0 - coreFrac);
+      float glowFade = (1.0 - glowDist * glowDist) * step(dist, 1.0);
+      float hasGlow = step(0.15, v_alpha);
+      float alpha = coreAlpha * v_alpha + glowFade * u_glowAlpha * v_alpha * hasGlow;
+      if (alpha < 0.002) discard;
+      gl_FragColor = vec4(0.831, 0.659, 0.263, alpha);
+    }`;
+
+  const LINE_VS = `
+    attribute vec2 a_position;
+    attribute float a_alpha;
+    uniform vec2 u_resolution;
+    varying float v_alpha;
+    void main() {
+      vec2 clip = (a_position / u_resolution) * 2.0 - 1.0;
+      clip.y = -clip.y;
+      gl_Position = vec4(clip, 0.0, 1.0);
+      v_alpha = a_alpha;
+    }`;
+
+  const LINE_FS = `
+    precision mediump float;
+    varying float v_alpha;
+    void main() {
+      gl_FragColor = vec4(0.831, 0.659, 0.263, v_alpha);
+    }`;
+
+  // --- Shader helpers ---
+  function compileShader(src, type) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader error:', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+  function linkProgram(vs, fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compileShader(vs, gl.VERTEX_SHADER));
+    gl.attachShader(p, compileShader(fs, gl.FRAGMENT_SHADER));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      console.error('Link error:', gl.getProgramInfoLog(p));
+      return null;
+    }
+    return p;
+  }
+
+  // --- Programs & locations ---
+  const particleProg = linkProgram(PARTICLE_VS, PARTICLE_FS);
+  const pLoc = {
+    position: gl.getAttribLocation(particleProg, 'a_position'),
+    size: gl.getAttribLocation(particleProg, 'a_size'),
+    alpha: gl.getAttribLocation(particleProg, 'a_alpha'),
+    resolution: gl.getUniformLocation(particleProg, 'u_resolution'),
+    glowAlpha: gl.getUniformLocation(particleProg, 'u_glowAlpha'),
+  };
+
+  const lineProg = linkProgram(LINE_VS, LINE_FS);
+  const lLoc = {
+    position: gl.getAttribLocation(lineProg, 'a_position'),
+    alpha: gl.getAttribLocation(lineProg, 'a_alpha'),
+    resolution: gl.getUniformLocation(lineProg, 'u_resolution'),
+  };
+
+  // --- Buffers ---
+  const PFLOATS = 4; // x, y, size, alpha per particle
+  const particleData = new Float32Array(MAX_PARTICLES * PFLOATS);
+  const particleBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, particleData.byteLength, gl.DYNAMIC_DRAW);
+
+  const MAX_LINES = 8000;
+  const LFLOATS = 6; // x1,y1,a1,x2,y2,a2 per line
+  const lineData = new Float32Array(MAX_LINES * LFLOATS);
+  const lineBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, lineData.byteLength, gl.DYNAMIC_DRAW);
+
+  // --- GL state ---
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); // premultiplied alpha blending
+  gl.clearColor(0, 0, 0, 0);
+  gl.disable(gl.DEPTH_TEST);
 
   function resize() {
-    w = canvas.width = canvas.offsetWidth * (window.devicePixelRatio > 1 ? 1.5 : 1);
-    h = canvas.height = canvas.offsetHeight * (window.devicePixelRatio > 1 ? 1.5 : 1);
+    const dpr = window.devicePixelRatio > 1 ? 1.5 : 1;
+    w = canvas.width = canvas.offsetWidth * dpr;
+    h = canvas.height = canvas.offsetHeight * dpr;
     canvas.style.width = canvas.offsetWidth + 'px';
     canvas.style.height = canvas.offsetHeight + 'px';
+    gl.viewport(0, 0, w, h);
   }
 
   function init() {
@@ -36,89 +191,399 @@ function initHeroCanvas() {
         vy: (Math.random() - 0.5) * 0.4,
         r: Math.random() * 2 + 0.5,
         alpha: Math.random() * 0.4 + 0.1,
-        phase: Math.random() * Math.PI * 2
+        phase: Math.random() * Math.PI * 2,
+        reactivity: 0.3 + Math.random() * 0.7
       });
     }
   }
 
   function draw() {
-    c.clearRect(0, 0, w, h);
+    if (!heroVis.visible) { requestAnimationFrame(draw); return; }
     time += 0.005;
 
-    // Draw connections
+    // --- Audio RMS ---
+    const heroAn = getHeroAnalyser();
+    if (heroAn) {
+      heroAn.getByteTimeDomainData(heroRmsData);
+      let sum = 0;
+      for (let i = 0; i < heroRmsData.length; i++) {
+        const v = (heroRmsData[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / heroRmsData.length);
+      const target = Math.min(1, rms * 10);
+      const rate = target > audioIntensity ? 0.25 : 0.06;
+      audioIntensity += (target - audioIntensity) * rate;
+      rmsSmooth += (target - rmsSmooth) * 0.008;
+      const now = performance.now();
+      if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) {
+        spawnRipple();
+        lastRippleTime = now;
+      }
+    } else {
+      audioIntensity += (0 - audioIntensity) * 0.02;
+      rmsSmooth = 0;
+    }
+
+    // --- Particle lifecycle ---
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      if (p.age !== undefined) p.age++;
+      if (p.life !== undefined) {
+        p.life -= p.decay;
+        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        p.alpha = p.baseAlpha * p.life;
+      }
+    }
+    if (particles.length < MAX_PARTICLES && Math.random() < 0.15) {
+      particles.push({
+        x: Math.random() * w, y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
+        r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
+        phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120
+      });
+    }
+
+    // --- Spatial grid + connection lines ---
+    const CELL = 140;
+    const cols = Math.ceil(w / CELL) + 1;
+    const grid = new Map();
     for (let i = 0; i < particles.length; i++) {
-      for (let j = i + 1; j < particles.length; j++) {
-        const dx = particles[i].x - particles[j].x;
-        const dy = particles[i].y - particles[j].y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 140) {
-          const alpha = (1 - dist / 140) * 0.06;
-          c.strokeStyle = `rgba(212, 168, 67, ${alpha})`;
-          c.lineWidth = 0.5;
-          c.beginPath();
-          c.moveTo(particles[i].x, particles[i].y);
-          c.lineTo(particles[j].x, particles[j].y);
-          c.stroke();
+      const p = particles[i];
+      const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols;
+      const cell = grid.get(key);
+      if (cell) cell.push(i); else grid.set(key, [i]);
+    }
+    const MAX_CONN = 3;
+    const connCount = new Uint8Array(particles.length);
+    const aiBrightBoost = 1 + audioIntensity * 2;
+    const lineAlphas = [0.06 * aiBrightBoost, 0.048 * aiBrightBoost, 0.036 * aiBrightBoost, 0.024 * aiBrightBoost, 0.012 * aiBrightBoost];
+    let lineIdx = 0;
+
+    for (const [key, cell] of grid) {
+      const gx = key % cols, gy = (key / cols) | 0;
+      for (let nx = gx; nx <= gx + 1; nx++) {
+        for (let ny = gy - 1; ny <= gy + 1; ny++) {
+          if (nx === gx && ny < gy) continue;
+          const nk = nx + ny * cols;
+          const neighbor = nk === key ? cell : grid.get(nk);
+          if (!neighbor) continue;
+          for (let ii = 0; ii < cell.length; ii++) {
+            const ai = cell[ii];
+            if (connCount[ai] >= MAX_CONN) continue;
+            const a = particles[ai];
+            const jStart = nk === key ? ii + 1 : 0;
+            for (let jj = jStart; jj < neighbor.length; jj++) {
+              const bi = neighbor[jj];
+              if (connCount[bi] >= MAX_CONN) continue;
+              const b = particles[bi];
+              const dx = a.x - b.x, dy = a.y - b.y;
+              const d2 = dx * dx + dy * dy;
+              if (d2 < 19600 && lineIdx < MAX_LINES * LFLOATS) {
+                const bucket = Math.min((d2 / 3920) | 0, 4);
+                const la = lineAlphas[bucket];
+                lineData[lineIdx++] = a.x;
+                lineData[lineIdx++] = a.y;
+                lineData[lineIdx++] = la;
+                lineData[lineIdx++] = b.x;
+                lineData[lineIdx++] = b.y;
+                lineData[lineIdx++] = la;
+                connCount[ai]++;
+                connCount[bi]++;
+              }
+            }
+          }
         }
       }
     }
+    const lineVertCount = lineIdx / 3; // 3 floats per vertex (x, y, alpha)
 
-    // Draw + move particles
-    particles.forEach(p => {
-      // Simulated "audio reactivity" via sine
+    // --- Button center ---
+    let btnCX = w * 0.5, btnCY = h * 0.5;
+    if (listenBtn) {
+      const btnRect = listenBtn.getBoundingClientRect();
+      const canRect = canvas.getBoundingClientRect();
+      btnCX = (btnRect.left + btnRect.width * 0.5 - canRect.left) * (w / canRect.width);
+      btnCY = (btnRect.top + btnRect.height * 0.5 - canRect.top) * (h / canRect.height);
+    }
+
+    // --- Physics + fill particle buffer ---
+    const scaleX = w / window.innerWidth;
+    const scaleY = h / window.innerHeight;
+    const mx = mouseX * scaleX, my = mouseY * scaleY;
+    let pIdx = 0;
+
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
       const wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5;
-      const currentAlpha = p.alpha * (0.5 + wave * 0.5);
-      const currentR = p.r * (0.8 + wave * 0.4);
+      const fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1;
+      const react = p.reactivity || 0;
+      const audioBoost = audioIntensity * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
+      const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
+      const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
 
-      c.fillStyle = `rgba(212, 168, 67, ${currentAlpha})`;
-      c.beginPath();
-      c.arc(p.x, p.y, currentR, 0, Math.PI * 2);
-      c.fill();
+      // Fill GPU buffer — pointSize = currentR * 6 (core is inner 1/3, glow is outer 2/3)
+      particleData[pIdx++] = p.x;
+      particleData[pIdx++] = p.y;
+      particleData[pIdx++] = Math.max(3, currentR * 6);
+      particleData[pIdx++] = currentAlpha;
 
-      // Glow on brighter particles
-      if (currentAlpha > 0.25) {
-        c.fillStyle = `rgba(212, 168, 67, ${currentAlpha * 0.2})`;
-        c.beginPath();
-        c.arc(p.x, p.y, currentR * 3, 0, Math.PI * 2);
-        c.fill();
-      }
-
+      // Physics: position update
       p.x += p.vx;
       p.y += p.vy;
 
-      // Mouse attraction
-      const scaleX = w / window.innerWidth;
-      const scaleY = h / window.innerHeight;
-      const dmx = mouseX * scaleX - p.x;
-      const dmy = mouseY * scaleY - p.y;
-      const mdist = Math.sqrt(dmx * dmx + dmy * dmy);
-      if (mdist < 350) {
-        const proximity = 1 - mdist / 350;
-        const force = proximity * 0.00012;
-        // Tangential component for swirl
-        const tx = -dmy;
-        const ty = dmx;
-        const swirl = proximity * 0.00015;
-        p.vx += dmx * force + tx * swirl;
-        p.vy += dmy * force + ty * swirl;
+      // Audio swirl
+      {
+        const dcx = p.x - btnCX, dcy = p.y - btnCY;
+        const dist = Math.sqrt(dcx * dcx + dcy * dcy) || 1;
+        const swirlRadius = Math.max(w, h) * 0.6;
+        const proximity = Math.max(0, 1 - dist / swirlRadius);
+        if (audioIntensity > 0.01 && proximity > 0) {
+          const nx = dcx / dist, ny = dcy / dist;
+          const swirlStr = audioIntensity * proximity * 0.04;
+          p.vx += -ny * swirlStr;
+          p.vy += nx * swirlStr;
+          const pull = audioIntensity * proximity * 0.012;
+          p.vx -= nx * pull;
+          p.vy -= ny * pull;
+          const jit = react * 0.25 * audioIntensity;
+          p.vx += (Math.random() - 0.5) * jit;
+          p.vy += (Math.random() - 0.5) * jit;
+        }
+        if (audioIntensity < 0.5 && audioIntensity > 0.001 && !heroAudioPlaying && dist > 1) {
+          const nx = dcx / dist, ny = dcy / dist;
+          const spread = (0.5 - audioIntensity) * 0.008;
+          p.vx += nx * spread;
+          p.vy += ny * spread;
+        }
+      }
+
+      // Mouse attraction (disabled during playback)
+      if (!listenBtn || !listenBtn.classList.contains('playing')) {
+        const dmx = mx - p.x, dmy = my - p.y;
+        const d2 = dmx * dmx + dmy * dmy;
+        if (d2 < 122500) {
+          const mdist = Math.sqrt(d2);
+          const proximity = 1 - mdist / 350;
+          const force = proximity * 0.00012;
+          const swirl = proximity * 0.00015;
+          p.vx += dmx * force + dmy * swirl;
+          p.vy += dmy * force + (-dmx) * swirl;
+        }
       }
 
       p.vx *= 0.985;
       p.vy *= 0.985;
-
       if (p.x < 0) p.x = w;
       if (p.x > w) p.x = 0;
       if (p.y < 0) p.y = h;
       if (p.y > h) p.y = 0;
-    });
+    }
+    const activeCount = particles.length;
+
+    // --- RENDER ---
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Draw lines first (behind particles)
+    if (lineVertCount > 0) {
+      gl.useProgram(lineProg);
+      gl.uniform2f(lLoc.resolution, w, h);
+      gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, lineData.subarray(0, lineIdx));
+      gl.enableVertexAttribArray(lLoc.position);
+      gl.vertexAttribPointer(lLoc.position, 2, gl.FLOAT, false, 12, 0);
+      gl.enableVertexAttribArray(lLoc.alpha);
+      gl.vertexAttribPointer(lLoc.alpha, 1, gl.FLOAT, false, 12, 8);
+      gl.drawArrays(gl.LINES, 0, lineVertCount);
+      gl.disableVertexAttribArray(lLoc.position);
+      gl.disableVertexAttribArray(lLoc.alpha);
+    }
+
+    // Draw particles
+    if (activeCount > 0) {
+      gl.useProgram(particleProg);
+      gl.uniform2f(pLoc.resolution, w, h);
+      gl.uniform1f(pLoc.glowAlpha, 0.06 + audioIntensity * 0.08);
+      gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, particleData.subarray(0, activeCount * PFLOATS));
+      gl.enableVertexAttribArray(pLoc.position);
+      gl.vertexAttribPointer(pLoc.position, 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(pLoc.size);
+      gl.vertexAttribPointer(pLoc.size, 1, gl.FLOAT, false, 16, 8);
+      gl.enableVertexAttribArray(pLoc.alpha);
+      gl.vertexAttribPointer(pLoc.alpha, 1, gl.FLOAT, false, 16, 12);
+      gl.drawArrays(gl.POINTS, 0, activeCount);
+      gl.disableVertexAttribArray(pLoc.position);
+      gl.disableVertexAttribArray(pLoc.size);
+      gl.disableVertexAttribArray(pLoc.alpha);
+    }
 
     requestAnimationFrame(draw);
   }
+
+  // Click + drag to spawn bursts of particles
+  let heroDragging = false;
+  const heroEl = document.getElementById('hero');
+
+  function spawnBurst(e) {
+    if (particles.length > MAX_PARTICLES) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = w / rect.width;
+    const scaleY = h / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+    const count = heroDragging ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.3 + Math.random() * 0.6;
+      const baseAlpha = 0.3 + Math.random() * 0.2;
+      particles.push({
+        x: cx + (Math.random() - 0.5) * 20,
+        y: cy + (Math.random() - 0.5) * 20,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        r: Math.random() * 2 + 0.5,
+        alpha: baseAlpha,
+        baseAlpha,
+        phase: Math.random() * Math.PI * 2,
+        life: 1,
+        decay: 0.0003 + Math.random() * 0.0007,
+        age: 0, fadeIn: 80 + Math.floor(Math.random() * 80)
+      });
+    }
+  }
+
+  heroEl.addEventListener('mousedown', (e) => { heroDragging = true; spawnBurst(e); });
+  heroEl.addEventListener('mousemove', (e) => { if (heroDragging) spawnBurst(e); });
+  window.addEventListener('mouseup', () => { heroDragging = false; });
 
   window.addEventListener('resize', () => { resize(); init(); });
   resize();
   init();
   draw();
+}
+
+// ===== Hero: Canvas 2D fallback =====
+function initHeroCanvas2D() {
+  const canvas = document.getElementById('hero-canvas');
+  if (!canvas) return;
+  const c = canvas.getContext('2d');
+  let w, h;
+  const PARTICLE_COUNT = 240;
+  let particles = [];
+  let time = 0;
+  const heroVis = trackVisibility('hero');
+  let heroAudioPlaying = false;
+  let audioIntensity = 0;
+  const heroRmsData = new Uint8Array(128);
+  let rmsSmooth = 0;
+  let lastRippleTime = 0;
+  const listenBtn = document.querySelector('#hero .listen-btn');
+
+  function spawnRipple() {
+    if (!listenBtn) return;
+    const ring = document.createElement('span');
+    ring.className = 'listen-ring';
+    ring.style.animation = 'ripple 1.6s ease-out forwards';
+    listenBtn.appendChild(ring);
+    ring.addEventListener('animationend', () => ring.remove());
+  }
+  if (listenBtn) {
+    const mo = new MutationObserver(() => {
+      heroAudioPlaying = listenBtn.classList.contains('playing');
+    });
+    mo.observe(listenBtn, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  function resize() {
+    w = canvas.width = canvas.offsetWidth * (window.devicePixelRatio > 1 ? 1.5 : 1);
+    h = canvas.height = canvas.offsetHeight * (window.devicePixelRatio > 1 ? 1.5 : 1);
+    canvas.style.width = canvas.offsetWidth + 'px';
+    canvas.style.height = canvas.offsetHeight + 'px';
+  }
+
+  function init() {
+    particles = [];
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      particles.push({
+        x: Math.random() * w, y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
+        r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
+        phase: Math.random() * Math.PI * 2, reactivity: 0.3 + Math.random() * 0.7
+      });
+    }
+  }
+
+  function draw() {
+    if (!heroVis.visible) { requestAnimationFrame(draw); return; }
+    c.clearRect(0, 0, w, h);
+    time += 0.005;
+    const heroAn = getHeroAnalyser();
+    if (heroAn) {
+      heroAn.getByteTimeDomainData(heroRmsData);
+      let sum = 0;
+      for (let i = 0; i < heroRmsData.length; i++) { const v = (heroRmsData[i] - 128) / 128; sum += v * v; }
+      const rms = Math.sqrt(sum / heroRmsData.length);
+      const target = Math.min(1, rms * 10);
+      audioIntensity += ((target > audioIntensity ? 0.25 : 0.06) * (target - audioIntensity));
+      rmsSmooth += (target - rmsSmooth) * 0.008;
+      const now = performance.now();
+      if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) { spawnRipple(); lastRippleTime = now; }
+    } else { audioIntensity += (0 - audioIntensity) * 0.02; rmsSmooth = 0; }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      if (p.age !== undefined) p.age++;
+      if (p.life !== undefined) { p.life -= p.decay; if (p.life <= 0) { particles.splice(i, 1); continue; } p.alpha = p.baseAlpha * p.life; }
+    }
+    if (particles.length < 5000 && Math.random() < 0.15) {
+      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120 });
+    }
+    const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
+    for (let i = 0; i < particles.length; i++) { const p = particles[i]; const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols; const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]); }
+    const buckets = [[], [], [], [], []], MAX_CONN = 3, connCount = new Uint8Array(particles.length);
+    for (const [key, cell] of grid) { const gx = key % cols, gy = (key / cols) | 0; for (let nx = gx; nx <= gx + 1; nx++) { for (let ny = gy - 1; ny <= gy + 1; ny++) { if (nx === gx && ny < gy) continue; const nk = nx + ny * cols, neighbor = nk === key ? cell : grid.get(nk); if (!neighbor) continue; for (let ii = 0; ii < cell.length; ii++) { const ai = cell[ii]; if (connCount[ai] >= MAX_CONN) continue; const a = particles[ai], jStart = nk === key ? ii + 1 : 0; for (let jj = jStart; jj < neighbor.length; jj++) { const bi = neighbor[jj]; if (connCount[bi] >= MAX_CONN) continue; const b = particles[bi], dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy; if (d2 < 19600) { buckets[Math.min((d2 / 3920) | 0, 4)].push(a.x, a.y, b.x, b.y); connCount[ai]++; connCount[bi]++; } } } } } }
+    c.lineWidth = 0.5 + audioIntensity * 0.5;
+    const aiBB = 1 + audioIntensity * 2, als = [0.06 * aiBB, 0.048 * aiBB, 0.036 * aiBB, 0.024 * aiBB, 0.012 * aiBB];
+    for (let b = 0; b < 5; b++) { const lines = buckets[b]; if (!lines.length) continue; c.strokeStyle = `rgba(212,168,67,${als[b]})`; c.beginPath(); for (let k = 0; k < lines.length; k += 4) { c.moveTo(lines[k], lines[k + 1]); c.lineTo(lines[k + 2], lines[k + 3]); } c.stroke(); }
+    let btnCX = w * 0.5, btnCY = h * 0.5;
+    if (listenBtn) { const br = listenBtn.getBoundingClientRect(), cr = canvas.getBoundingClientRect(); btnCX = (br.left + br.width * 0.5 - cr.left) * (w / cr.width); btnCY = (br.top + br.height * 0.5 - cr.top) * (h / cr.height); }
+    const scaleX = w / window.innerWidth, scaleY = h / window.innerHeight, mx = mouseX * scaleX, my = mouseY * scaleY;
+    const glowList = [];
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i], wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5, fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1, react = p.reactivity || 0;
+      const audioBoost = audioIntensity * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
+      const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
+      const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
+      c.fillStyle = `rgba(212,168,67,${currentAlpha})`;
+      if (currentR < 1.5) { const s = currentR * 2; c.fillRect(p.x - currentR, p.y - currentR, s, s); } else { c.beginPath(); c.arc(p.x, p.y, currentR, 0, Math.PI * 2); c.fill(); }
+      if (currentAlpha > 0.35) glowList.push(p.x, p.y, currentR * 3);
+      p.x += p.vx; p.y += p.vy;
+      { const dcx = p.x - btnCX, dcy = p.y - btnCY, dist = Math.sqrt(dcx * dcx + dcy * dcy) || 1, swirlRadius = Math.max(w, h) * 0.6, proximity = Math.max(0, 1 - dist / swirlRadius);
+        if (audioIntensity > 0.01 && proximity > 0) { const nx = dcx / dist, ny = dcy / dist; p.vx += -ny * audioIntensity * proximity * 0.04; p.vy += nx * audioIntensity * proximity * 0.04; const pull = audioIntensity * proximity * 0.012; p.vx -= nx * pull; p.vy -= ny * pull; const jit = react * 0.25 * audioIntensity; p.vx += (Math.random() - 0.5) * jit; p.vy += (Math.random() - 0.5) * jit; }
+        if (audioIntensity < 0.5 && audioIntensity > 0.001 && !heroAudioPlaying && dist > 1) { const nx = dcx / dist, ny = dcy / dist; p.vx += nx * (0.5 - audioIntensity) * 0.008; p.vy += ny * (0.5 - audioIntensity) * 0.008; } }
+      if (!listenBtn || !listenBtn.classList.contains('playing')) { const dmx = mx - p.x, dmy = my - p.y, d2 = dmx * dmx + dmy * dmy; if (d2 < 122500) { const mdist = Math.sqrt(d2), proximity = 1 - mdist / 350; p.vx += dmx * proximity * 0.00012 + dmy * proximity * 0.00015; p.vy += dmy * proximity * 0.00012 + (-dmx) * proximity * 0.00015; } }
+      p.vx *= 0.985; p.vy *= 0.985;
+      if (p.x < 0) p.x = w; if (p.x > w) p.x = 0; if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
+    }
+    if (glowList.length > 0) { c.fillStyle = `rgba(212,168,67,${0.06 + audioIntensity * 0.08})`; c.beginPath(); for (let g = 0; g < glowList.length; g += 3) { c.moveTo(glowList[g] + glowList[g + 2], glowList[g + 1]); c.arc(glowList[g], glowList[g + 1], glowList[g + 2], 0, Math.PI * 2); } c.fill(); }
+    requestAnimationFrame(draw);
+  }
+
+  let heroDragging = false;
+  const heroEl = document.getElementById('hero');
+  function spawnBurst(e) {
+    if (particles.length > 5000) return;
+    const rect = canvas.getBoundingClientRect(), scaleX = w / rect.width, scaleY = h / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX, cy = (e.clientY - rect.top) * scaleY;
+    const count = heroDragging ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) { const angle = Math.random() * Math.PI * 2, speed = 0.3 + Math.random() * 0.6, baseAlpha = 0.3 + Math.random() * 0.2;
+      particles.push({ x: cx + (Math.random() - 0.5) * 20, y: cy + (Math.random() - 0.5) * 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r: Math.random() * 2 + 0.5, alpha: baseAlpha, baseAlpha, phase: Math.random() * Math.PI * 2, life: 1, decay: 0.0003 + Math.random() * 0.0007, age: 0, fadeIn: 80 + Math.floor(Math.random() * 80) }); }
+  }
+  heroEl.addEventListener('mousedown', (e) => { heroDragging = true; spawnBurst(e); });
+  heroEl.addEventListener('mousemove', (e) => { if (heroDragging) spawnBurst(e); });
+  window.addEventListener('mouseup', () => { heroDragging = false; });
+  window.addEventListener('resize', () => { resize(); init(); });
+  resize(); init(); draw();
 }
 
 // ===== Vision: Drifting luminous nebula orbs =====
@@ -127,7 +592,8 @@ function initVisionCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 0;
+  let time = 5 + Math.random() * 10; // start mid-animation
+  const vis = trackVisibility('vision');
 
   const ORB_COUNT = 55;
   let orbs = [];
@@ -183,6 +649,7 @@ function initVisionCanvas() {
   // mxV/myV updated from global mouseX/mouseY in draw loop
 
   function draw() {
+    if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.003;
 
@@ -246,7 +713,8 @@ function initCSCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 0;
+  let time = 5 + Math.random() * 10;
+  const vis = trackVisibility('citizen-science');
 
   // Pre-generate some "discovery" positions
   const discoveries = Array.from({ length: 6 }, () => ({
@@ -261,6 +729,7 @@ function initCSCanvas() {
   }
 
   function draw() {
+    if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.0053;
 
@@ -328,7 +797,8 @@ function initDomeCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 0;
+  let time = 5 + Math.random() * 10;
+  const vis = trackVisibility('planetarium');
   const STARS = 200;
   let stars = [];
 
@@ -354,6 +824,7 @@ function initDomeCanvas() {
   }
 
   function draw() {
+    if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.01;
 
@@ -373,7 +844,13 @@ function initDomeCanvas() {
     c.stroke();
 
     // Stars
-    stars.forEach(s => {
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      if (s.age !== undefined) {
+        s.age++;
+        const fadeIn = Math.min(1, s.age / s.fadeIn);
+        s.alpha = s.targetAlpha * fadeIn;
+      }
       const twinkle = Math.sin(time * s.twinkleSpeed + s.twinklePhase) * 0.5 + 0.5;
       const a = s.alpha * (0.3 + twinkle * 0.7);
 
@@ -385,13 +862,48 @@ function initDomeCanvas() {
       // Subtle drift
       s.y -= s.speed;
       if (s.y < -5) {
-        s.y = h + 5;
-        s.x = Math.random() * w;
+        if (s.age !== undefined) {
+          // User-spawned: kill it
+          stars.splice(i, 1);
+        } else {
+          // Original: wrap to bottom
+          s.y = h + 5;
+          s.x = Math.random() * w;
+        }
       }
-    });
+    }
 
     requestAnimationFrame(draw);
   }
+
+  // Click + drag to add stars
+  let domeDragging = false;
+  const domeEl = document.getElementById('planetarium');
+
+  function spawnStars(e) {
+    if (stars.length > 5000) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const count = domeDragging ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < count; i++) {
+      stars.push({
+        x: cx + (Math.random() - 0.5) * 40,
+        y: cy + (Math.random() - 0.5) * 40,
+        r: Math.random() * 1.5 + 0.3,
+        alpha: 0,
+        targetAlpha: 0.3 + Math.random() * 0.3,
+        age: 0, fadeIn: 60 + Math.floor(Math.random() * 60),
+        speed: Math.random() * 0.2 + 0.05,
+        twinkleSpeed: 0.5 + Math.random() * 2,
+        twinklePhase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  domeEl.addEventListener('mousedown', (e) => { domeDragging = true; spawnStars(e); });
+  domeEl.addEventListener('mousemove', (e) => { if (domeDragging) spawnStars(e); });
+  window.addEventListener('mouseup', () => { domeDragging = false; });
 
   window.addEventListener('resize', resize);
   resize();
@@ -404,7 +916,8 @@ function initSynthWave() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 0;
+  let time = 5 + Math.random() * 10;
+  const vis = trackVisibility('stem-music');
 
   function resize() {
     const rect = canvas.parentElement.getBoundingClientRect();
@@ -412,32 +925,77 @@ function initSynthWave() {
     h = canvas.height = rect.height;
   }
 
+  let waveData = null;
+  let liveBlend = 0; // 0 = idle sine, 1 = full oscilloscope
+
   function draw() {
+    if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.011;
 
     const centerY = h / 2;
-    const amp = h * 0.25;
+    const amp = h * 0.42;
+    const analyser = getStemAnalyser();
 
-    // Wavetable waveform (complex shape = "satellite data oscillator")
-    c.strokeStyle = 'rgba(139, 110, 192, 0.5)';
-    c.lineWidth = 2;
+    // Smooth morph between idle and live
+    const target = analyser ? 1 : 0;
+    liveBlend += (target - liveBlend) * 0.06;
+
+    // Get live data if available
+    let liveY = null;
+    if (analyser) {
+      const bufLen = analyser.frequencyBinCount;
+      if (!waveData || waveData.length !== bufLen) waveData = new Uint8Array(bufLen);
+      analyser.getByteTimeDomainData(waveData);
+      liveY = new Float32Array(w);
+      for (let x = 0; x < w; x++) {
+        const i = (x / w) * bufLen;
+        const i0 = Math.floor(i), i1 = Math.min(i0 + 1, bufLen - 1);
+        const frac = i - i0;
+        const v0 = (waveData[i0] - 128) / 128;
+        const v1 = (waveData[i1] - 128) / 128;
+        liveY[x] = (v0 + (v1 - v0) * frac);
+      }
+    }
+
+    // Compute blended waveform
+    function getY(x) {
+      const t = x / w;
+      const idleVal =
+        Math.sin(t * Math.PI * 4 + time) * 0.5 +
+        Math.sin(t * Math.PI * 7 + time * 0.6) * 0.25 +
+        Math.sin(t * Math.PI * 13 + time * 1.3) * 0.12;
+      const live = liveY ? liveY[x] * 5 : 0;
+      const blended = idleVal * (1 - liveBlend) + live * liveBlend;
+      return centerY + blended * amp;
+    }
+
+    // Glow layer
+    const glowAlpha = 0.08 + liveBlend * 0.12;
+    c.strokeStyle = `rgba(139, 110, 192, ${glowAlpha})`;
+    c.lineWidth = 5 + liveBlend * 3;
     c.beginPath();
     for (let x = 0; x < w; x++) {
-      const t = x / w;
-      const y = centerY +
-        Math.sin(t * Math.PI * 4 + time) * amp * 0.5 +
-        Math.sin(t * Math.PI * 7 + time * 0.6) * amp * 0.25 +
-        Math.sin(t * Math.PI * 13 + time * 1.3) * amp * 0.12;
+      const y = getY(x);
       if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
     }
     c.stroke();
 
-    // Filled underneath
+    // Sharp line
+    c.strokeStyle = `rgba(139, 110, 192, ${0.5 + liveBlend * 0.4})`;
+    c.lineWidth = 2;
+    c.beginPath();
+    for (let x = 0; x < w; x++) {
+      const y = getY(x);
+      if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.stroke();
+
+    // Fill underneath
     c.lineTo(w, centerY);
     c.lineTo(0, centerY);
     c.closePath();
-    c.fillStyle = 'rgba(139, 110, 192, 0.04)';
+    c.fillStyle = `rgba(139, 110, 192, ${0.04 + liveBlend * 0.04})`;
     c.fill();
 
     requestAnimationFrame(draw);
@@ -455,7 +1013,8 @@ function initSpectrumCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 0;
+  let time = 5 + Math.random() * 10;
+  const vis2 = trackVisibility('stem-music');
 
   const BAR_COUNT = 48;
   const bars = [];
@@ -477,6 +1036,7 @@ function initSpectrumCanvas() {
   }
 
   function draw() {
+    if (!vis2.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.0008;
 
@@ -544,7 +1104,8 @@ function initGlobeCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 0;
+  let time = 5 + Math.random() * 10;
+  const vis = trackVisibility('contact');
   let smoothMX = 0.5, smoothMY = 0.5;
 
   function resize() {
@@ -637,6 +1198,7 @@ function initGlobeCanvas() {
   const RING_SEGMENTS = 64;
 
   function draw() {
+    if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.003;
 

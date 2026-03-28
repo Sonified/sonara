@@ -3,8 +3,8 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop } from './audio.js';
-import { initVisuals } from './visuals.js';
+import { play, stop, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern } from './audio.js?v=5';
+import { initVisuals } from './visuals.js?v=5';
 
 (function() {
   'use strict';
@@ -82,6 +82,15 @@ import { initVisuals } from './visuals.js';
         }
       } else {
         entry.target.classList.remove('in-view');
+
+        // Fade out sound when scrolling away from a section
+        const sectionSound = entry.target.dataset?.sound;
+        if (sectionSound) {
+          const playingBtn = entry.target.querySelector('.sound-trigger.playing');
+          if (playingBtn && !fadingButtons.has(playingBtn)) {
+            fadeStop(playingBtn, getSoundId(playingBtn));
+          }
+        }
       }
     });
   }, { threshold: 0.4 });
@@ -123,22 +132,96 @@ import { initVisuals } from './visuals.js';
     return section?.dataset?.sound;
   }
 
+  const paperTitle = document.querySelector('.cs-paper-title');
+  const fadingButtons = new Set();
+
+  // Track auto-end timers so we can cancel them on manual stop
+  const autoEndTimers = new Map();
+
+  function fadeStop(btn, soundId) {
+    if (fadingButtons.has(btn)) return;
+    console.log(`[MAIN v3] fadeStop("${soundId}")`);
+    fadingButtons.add(btn);
+    btn.classList.add('fading');
+    // Cancel any auto-end timer for this button
+    if (autoEndTimers.has(btn)) {
+      clearTimeout(autoEndTimers.get(btn));
+      autoEndTimers.delete(btn);
+    }
+    const p = stop(soundId);
+    const cleanup = () => {
+      btn.classList.remove('playing', 'fading');
+      fadingButtons.delete(btn);
+      if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
+      if (soundId === 'stem-music') {
+        currentDisplayPattern = generateStemPattern();
+        setStemPattern(currentDisplayPattern);
+        buildGrid(currentDisplayPattern);
+      }
+    };
+    if (p && typeof p.then === 'function') p.then(cleanup);
+    else setTimeout(cleanup, 2000);
+  }
+
+  function autoEnd(btn, soundId) {
+    btn.classList.remove('playing', 'fading');
+    fadingButtons.delete(btn);
+    autoEndTimers.delete(btn);
+    if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
+    stop(soundId);
+    // Generate fresh pattern for next play
+    if (soundId === 'stem-music') {
+      currentDisplayPattern = generateStemPattern();
+      setStemPattern(currentDisplayPattern);
+      buildGrid(currentDisplayPattern);
+    }
+  }
+
+  // Poll audio clock via rAF for frame-accurate end detection
+  function watchForEnd(btn, soundId) {
+    function check() {
+      if (!btn.classList.contains('playing')) return; // manually stopped
+      const endTime = getEndTime(soundId);
+      if (!endTime) { autoEnd(btn, soundId); return; } // already cleaned up
+      if (audioNow() >= endTime) {
+        autoEnd(btn, soundId);
+      } else {
+        requestAnimationFrame(check);
+      }
+    }
+    requestAnimationFrame(check);
+  }
+
   document.querySelectorAll('.sound-trigger').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const soundId = getSoundId(btn);
       if (!soundId) return;
+      if (fadingButtons.has(btn)) {
+        console.log(`[MAIN v3] click ignored — "${soundId}" is fading`);
+        return;
+      }
 
-      // Stop other playing sounds
+      // Stop other playing sounds (with fade)
       document.querySelectorAll('.sound-trigger.playing').forEach(b => {
-        if (b !== btn) {
-          b.classList.remove('playing');
+        if (b !== btn && !fadingButtons.has(b)) {
           const otherId = getSoundId(b);
-          if (otherId) stop(otherId);
+          if (otherId) fadeStop(b, otherId);
         }
       });
 
-      const isPlaying = play(soundId);
-      btn.classList.toggle('playing', isPlaying);
+      if (btn.classList.contains('playing')) {
+        console.log(`[MAIN v3] click → stop "${soundId}"`);
+        fadeStop(btn, soundId);
+      } else {
+        const result = await play(soundId);
+        if (result === false) return; // already playing somehow
+        btn.classList.add('playing');
+        if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.add('pulsing');
+        // Finite-duration sound: poll audio clock for precise end
+        if (typeof result === 'number') {
+          watchForEnd(btn, soundId);
+        }
+      }
     });
   });
 
@@ -155,27 +238,77 @@ import { initVisuals } from './visuals.js';
     if (hero) hintObs.observe(hero);
   }
 
-  // ===== Sequencer Animation =====
-  function animateSequencer() {
-    const cells = document.querySelectorAll('.seq-cell');
-    if (cells.length === 0) return;
+  // ===== Live Sequencer Grid =====
+  const seqGrid = document.getElementById('seq-grid');
+  let seqCells = []; // array of { cells: [...16 DOM elements] } per row
+  let lastPlayheadCol = -1;
 
-    let step = 0;
-    setInterval(() => {
-      cells.forEach((cell, i) => {
-        const col = i % 4;
-        if (col === step % 4) {
-          cell.style.borderColor = cell.classList.contains('active')
-            ? 'rgba(139, 110, 192, 0.8)'
-            : 'rgba(255, 255, 255, 0.12)';
-        } else {
-          cell.style.borderColor = cell.classList.contains('active')
-            ? 'rgba(139, 110, 192, 0.5)'
-            : 'rgba(255, 255, 255, 0.06)';
-        }
+  function buildGrid(pattern) {
+    seqGrid.innerHTML = '';
+    seqCells = [];
+
+    // Melody rows (always 5, high pitch to low)
+    const melodyRows = pattern.melodyRows || [];
+    melodyRows.forEach((rowData, r) => {
+      addRow(r === 0 ? 'SYN' : '', rowData, 'syn');
+    });
+
+    // Hat + Kick
+    addRow('HAT', pattern.hat, 'hat');
+    addRow('KCK', pattern.kick, 'kck');
+  }
+
+  function addRow(label, data, type) {
+    // Wrapper with display:contents so grid layout flows through
+    const wrapper = document.createElement('div');
+    wrapper.className = `seq-row-${type}`;
+    wrapper.style.display = 'contents';
+
+    const lbl = document.createElement('div');
+    lbl.className = 'seq-label';
+    lbl.textContent = label;
+    wrapper.appendChild(lbl);
+
+    const cells = [];
+    for (let i = 0; i < 16; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'seq-cell' + (data[i] ? ' active' : '');
+      wrapper.appendChild(cell);
+      cells.push(cell);
+    }
+    seqGrid.appendChild(wrapper);
+    seqCells.push({ cells });
+  }
+
+  // Generate initial pattern on load — this is what gets played first time
+  let currentDisplayPattern = generateStemPattern();
+  setStemPattern(currentDisplayPattern); // queue it for first play
+  buildGrid(currentDisplayPattern);
+
+  function animateSequencer() {
+    const pattern = getStemPattern();
+    if (pattern && seqCells.length) {
+      const elapsed = audioNow() - pattern.startTime;
+      const col = Math.floor(elapsed / pattern.step);
+
+      if (col !== lastPlayheadCol && col >= 0 && col < 16) {
+        lastPlayheadCol = col;
+        seqCells.forEach(row => {
+          row.cells.forEach((cell, i) => {
+            cell.classList.toggle('playhead', i === col);
+            cell.classList.toggle('lit', i === col && cell.classList.contains('active'));
+          });
+        });
+      }
+    } else if (lastPlayheadCol !== -1) {
+      lastPlayheadCol = -1;
+      seqCells.forEach(row => {
+        row.cells.forEach(cell => {
+          cell.classList.remove('playhead', 'lit');
+        });
       });
-      step++;
-    }, 400);
+    }
+    requestAnimationFrame(animateSequencer);
   }
   animateSequencer();
 

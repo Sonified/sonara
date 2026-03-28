@@ -136,7 +136,7 @@ a:hover { opacity: 0.7; }
 }
 
 @keyframes ripple {
-  0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.6; }
+  0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.24; }
   100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
 }
 
@@ -169,6 +169,7 @@ a:hover { opacity: 0.7; }
   justify-content: center;
   gap: 0;
   padding: 2rem;
+  user-select: none;
   width: 100%;
 }
 
@@ -304,6 +305,37 @@ a:hover { opacity: 0.7; }
   background: rgba(212, 168, 67, 0.1);
 }
 
+.sound-trigger.fading {
+  transition: all 1.5s ease !important;
+}
+
+.listen-btn.fading {
+  border-color: rgba(212, 168, 67, 0.35);
+  background: transparent;
+}
+
+.listen-btn.fading .listen-ring {
+  animation: none;
+  opacity: 0;
+}
+
+.music-listen.fading {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+.planet-listen.fading {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+.sound-trigger.fading .sound-icon {
+  background: var(--text-muted);
+  box-shadow: none;
+  animation: none;
+  transition: all 1.5s ease;
+}
+
 .listen-ring {
   position: absolute;
   left: 50%;
@@ -317,13 +349,7 @@ a:hover { opacity: 0.7; }
   transform: translate(-50%, -50%) scale(1);
 }
 
-.listen-btn.playing .listen-ring {
-  animation: ripple 2s ease-out infinite;
-}
-
-.listen-btn.playing .ring-2 {
-  animation: ripple 2s ease-out infinite 0.6s;
-}
+/* Ripples are now spawned dynamically by transient detection in visuals.js */
 
 .listen-icon {
   display: flex;
@@ -621,6 +647,16 @@ a:hover { opacity: 0.7; }
   color: var(--text-dim);
   font-style: italic;
   margin-bottom: 0.4rem;
+  transition: color 0.3s ease;
+}
+
+.cs-paper-title.pulsing {
+  animation: paper-pulse 2s ease-in-out infinite;
+}
+
+@keyframes paper-pulse {
+  0%, 100% { color: var(--text-dim); }
+  50% { color: var(--accent); text-shadow: 0 0 12px var(--accent); }
 }
 
 .cs-paper-journal {
@@ -711,7 +747,6 @@ a:hover { opacity: 0.7; }
 }
 
 .instrument-card:hover {
-  transform: translateY(-4px);
   border-color: rgba(139, 110, 192, 0.2);
 }
 
@@ -742,30 +777,70 @@ a:hover { opacity: 0.7; }
 /* Sequencer visual */
 .seq-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  padding: 1.5rem;
+  grid-template-columns: auto repeat(16, 1fr);
+  gap: 3px;
+  padding: 1rem;
   width: 100%;
-  max-width: 200px;
 }
+
+.seq-label {
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+  white-space: nowrap;
+}
+.seq-row-syn .seq-label { color: rgba(160, 130, 210, 0.7); }
+.seq-row-hat .seq-label { color: rgba(80, 190, 190, 0.7); }
+.seq-row-kck .seq-label { color: rgba(212, 168, 67, 0.7); }
 
 .seq-cell {
   aspect-ratio: 1;
-  border-radius: 4px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  transition: background 0.3s, box-shadow 0.3s;
+  transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
 }
 
-.seq-cell.active {
-  background: rgba(139, 110, 192, 0.35);
-  border-color: rgba(139, 110, 192, 0.5);
-  box-shadow: 0 0 12px rgba(139, 110, 192, 0.15);
-  animation: seqPulse 2s ease-in-out infinite;
+/* Synth rows — purple */
+.seq-row-syn .seq-cell.active {
+  background: rgba(139, 110, 192, 0.3);
+  border-color: rgba(139, 110, 192, 0.4);
+}
+.seq-row-syn .seq-cell.active.lit {
+  background: rgba(139, 110, 192, 0.85);
+  border-color: rgba(180, 150, 230, 0.9);
+  box-shadow: 0 0 10px rgba(139, 110, 192, 0.5);
 }
 
-.seq-cell.active:nth-child(2n) { animation-delay: 0.3s; }
-.seq-cell.active:nth-child(3n) { animation-delay: 0.6s; }
+/* Hat row — cyan/teal */
+.seq-row-hat .seq-cell.active {
+  background: rgba(80, 190, 190, 0.3);
+  border-color: rgba(80, 190, 190, 0.4);
+}
+.seq-row-hat .seq-cell.active.lit {
+  background: rgba(80, 210, 210, 0.85);
+  border-color: rgba(120, 230, 230, 0.9);
+  box-shadow: 0 0 10px rgba(80, 190, 190, 0.5);
+}
+
+/* Kick row — warm orange */
+.seq-row-kck .seq-cell.active {
+  background: rgba(212, 168, 67, 0.3);
+  border-color: rgba(212, 168, 67, 0.4);
+}
+.seq-row-kck .seq-cell.active.lit {
+  background: rgba(230, 180, 70, 0.85);
+  border-color: rgba(245, 200, 100, 0.9);
+  box-shadow: 0 0 10px rgba(212, 168, 67, 0.5);
+}
+
+.seq-cell.playhead {
+  border-color: rgba(255, 255, 255, 0.3);
+}
 
 /* Synth wave canvas */
 #synth-wave-canvas {
@@ -874,14 +949,11 @@ a:hover { opacity: 0.7; }
 .planet-content {
   position: relative;
   z-index: 1;
+  pointer-events: none;
+  user-select: none;
   width: 100%;
   max-width: 1200px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3rem;
   padding: 4rem 3rem;
-  text-align: center;
   opacity: 0;
   transform: translateY(40px);
   transition: opacity 0.9s ease, transform 0.9s ease;
@@ -892,8 +964,19 @@ a:hover { opacity: 0.7; }
   transform: translateY(0);
 }
 
-.planet-center {
-  max-width: 700px;
+.planet-split {
+  display: flex;
+  align-items: center;
+  gap: 4rem;
+}
+
+.planet-left {
+  flex: 1;
+  text-align: left;
+}
+
+.planet-right {
+  flex: 1;
 }
 
 .planet-title {
@@ -908,6 +991,25 @@ a:hover { opacity: 0.7; }
   font-size: 1.25rem;
   line-height: 1.8;
   color: var(--text-dim);
+}
+
+.planet-hero-image {
+  width: 100%;
+}
+
+.planet-hero-image img {
+  width: 100%;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.planet-image-caption {
+  display: block;
+  margin-top: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
 }
 
 .planet-details {
@@ -954,6 +1056,11 @@ a:hover { opacity: 0.7; }
   color: var(--text-muted);
   margin-top: 0.3rem;
   letter-spacing: 0.05em;
+}
+
+.planet-listen,
+.planet-content .sound-trigger {
+  pointer-events: auto;
 }
 
 .planet-listen {
@@ -1144,6 +1251,11 @@ a:hover { opacity: 0.7; }
   font-size: clamp(2rem, 4vw, 3rem);
   font-weight: 300;
   margin-top: -0.5rem;
+}
+
+.planet-left .partners-grid {
+  margin-top: 2rem;
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .partners-grid {
@@ -1505,6 +1617,14 @@ footer {
 
   .mlo-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .planet-split {
+    flex-direction: column;
+  }
+
+  .planet-left {
+    text-align: center;
   }
 
   .planet-details {

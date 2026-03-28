@@ -67,32 +67,21 @@
   </section>
 
   <!-- ===== GOAL 1: EDUCATION & COMMUNICATION ===== -->
-  <section id="planetarium" class="section" data-sound="planetarium">
+  <section id="planetarium" class="section">
     <canvas id="dome-canvas"></canvas>
     <div class="planet-content">
-      <div class="planet-center">
-        <div class="section-label">Goal 1</div>
-        <h2 class="planet-title">Education & Communication</h2>
-        <p class="planet-body">Immersive audification-infused experiences inside planetarium domes. Multi-channel spatial audio powered by OpenSpace software, where visitors don't just see the cosmos. They hear it.</p>
-      </div>
-      <div class="planet-details">
-        <div class="planet-detail">
-          <span class="planet-detail-num">11.2</span>
-          <span class="planet-detail-label">Speaker System<br><small>Multi-channel spatial audio</small></span>
+      <div class="planet-split">
+        <div class="planet-left">
+          <div class="section-label">Goal 1</div>
+          <h2 class="planet-title">Education & Communication</h2>
+          <p class="planet-body">Immersive audification-infused experiences inside planetarium domes and classrooms. Multi-channel spatial audio powered by OpenSpace software, where audiences don't just see the cosmos. They hear it.</p>
         </div>
-        <div class="planet-detail">
-          <span class="planet-detail-num">26</span>
-          <span class="planet-detail-label">Summer Bridge Scholars<br><small>CU Boulder pilot program</small></span>
-        </div>
-        <div class="planet-detail">
-          <span class="planet-detail-num">360°</span>
-          <span class="planet-detail-label">Spatial Audio<br><small>Full-dome immersion</small></span>
+        <div class="planet-right">
+          <div class="planet-hero-image">
+            <img src="images/EYU_2025_Alexander_HEARTS_3.jpeg" alt="SONARA team presenting audified heliophysics data to students at CU Boulder" loading="lazy">
+          </div>
         </div>
       </div>
-      <button class="sound-trigger planet-listen" aria-label="Enter the dome">
-        <span class="sound-icon"></span>
-        <span>Enter the dome</span>
-      </button>
       <div class="partners-grid" style="margin-top: 3rem; display: flex; flex-wrap: wrap; justify-content: center; gap: 0.8rem;">
         <div class="partner-logo"><span>CU Boulder</span></div>
         <div class="partner-logo"><span>Virginia Tech</span></div>
@@ -102,10 +91,8 @@
         <div class="partner-logo"><span>Harvard-Smithsonian</span></div>
         <div class="partner-logo"><span>UCLA</span></div>
         <div class="partner-logo"><span>U of Iowa</span></div>
-
         <div class="partner-logo"><span>SSI</span></div>
       </div>
-      <p style="text-align: center; color: rgba(255,255,255,0.4); font-size: 0.85rem; margin-top: 1.5rem;">Building the infrastructure for a new relationship between music, science, and the public.</p>
     </div>
   </section>
 
@@ -159,12 +146,7 @@
       <div class="instruments-grid">
         <div class="instrument-card">
           <div class="instrument-visual sequencer-visual">
-            <div class="seq-grid">
-              <div class="seq-cell active"></div><div class="seq-cell"></div><div class="seq-cell active"></div><div class="seq-cell"></div>
-              <div class="seq-cell"></div><div class="seq-cell active"></div><div class="seq-cell"></div><div class="seq-cell active"></div>
-              <div class="seq-cell active"></div><div class="seq-cell"></div><div class="seq-cell"></div><div class="seq-cell active"></div>
-              <div class="seq-cell"></div><div class="seq-cell active"></div><div class="seq-cell active"></div><div class="seq-cell"></div>
-            </div>
+            <div class="seq-grid" id="seq-grid"></div>
           </div>
           <h3>SONARA Sequencer</h3>
           <p>Web-based rhythmic pattern builder using audified heliophysics data as source material.</p>
@@ -307,9 +289,9 @@
     </div>
   </section>
 
-  <script src="js/rays.js"></script>
-  <script type="module" src="js/audio.js"></script>
-  <script type="module" src="js/visuals.js"></script>
-  <script type="module" src="js/main.js"></script>
+  <script src="js/rays.js?v=5"></script>
+  <script type="module" src="js/audio.js?v=5"></script>
+  <script type="module" src="js/visuals.js?v=5"></script>
+  <script type="module" src="js/main.js?v=5"></script>
 </body>
 </html>

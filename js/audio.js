@@ -5,6 +5,32 @@
 
 let ctx = null;
 const activeNodes = {};
+let stemAnalyser = null;
+let heroAnalyser = null;
+const bufferCache = {};
+
+async function loadBuffer(url) {
+  if (bufferCache[url]) return bufferCache[url];
+  const ac = getContext();
+  const resp = await fetch(url);
+  const arrayBuf = await resp.arrayBuffer();
+  const audioBuf = await ac.decodeAudioData(arrayBuf);
+  bufferCache[url] = audioBuf;
+  return audioBuf;
+}
+
+// Preload audio files on first user interaction
+let preloaded = false;
+function preload() {
+  if (preloaded) return;
+  preloaded = true;
+  loadBuffer('audio/mp3/THE_20120302_Cleaned_MAX.mp3');
+  loadBuffer('audio/mp3/Proton_Beam_Raw_WI_H2_MFI_181819_000_002.mp3');
+  loadBuffer('audio/mp3/Solar_Hum_Loop_More_Filtered_Short.mp3');
+  loadBuffer('audio/mp3/TRIMMED_SHORTER_MMS1_SCM_BRST_L2_Dawn_Chorus.mp3');
+  loadBuffer('audio/mp3/Kick_Processed_Final__WIND_BGSE_z_2007_08_13_LFEvent_CLEANED_ISOLATED_SHORT.mp3');
+  loadBuffer('audio/mp3/Solar_Shaker_1.mp3');
+}
 
 function getContext() {
   if (!ctx) {
@@ -48,116 +74,122 @@ function makeReverb(ac, duration, decay) {
   return buf;
 }
 
-// ===== HERO: Solar wind atmosphere =====
-function heroSound(ac, master) {
+// ===== HERO: Solar wind — alternates between two audified sources =====
+const heroFiles = [
+  'audio/mp3/Proton_Beam_Raw_WI_H2_MFI_181819_000_002.mp3',
+  'audio/mp3/Solar_Hum_Loop_More_Filtered_Short.mp3',
+  // 'audio/mp3/TRIMMED_SHORTER_MMS1_SCM_BRST_L2_Dawn_Chorus.mp3',
+];
+// Shuffle once on load — Fisher-Yates
+for (let i = heroFiles.length - 1; i > 0; i--) {
+  const j = Math.floor(Math.random() * (i + 1));
+  [heroFiles[i], heroFiles[j]] = [heroFiles[j], heroFiles[i]];
+}
+let heroFileIdx = 0;
+
+async function heroSound(ac, master) {
   const nodes = [];
+  const gains = [];
+  const url = heroFiles[heroFileIdx % heroFiles.length];
+  heroFileIdx++;
+  const buf = await loadBuffer(url);
   const now = ac.currentTime;
-  const noiseBuf = makeNoise(ac, 4);
 
-  // Filtered solar wind
-  const noise = ac.createBufferSource();
-  noise.buffer = noiseBuf;
-  noise.loop = true;
-  const bp = ac.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = 350;
-  bp.Q.value = 1.5;
-  bp.frequency.setValueAtTime(250, now);
-  bp.frequency.linearRampToValueAtTime(500, now + 6);
-  bp.frequency.linearRampToValueAtTime(250, now + 12);
-  const ng = ac.createGain();
-  ng.gain.value = 0;
-  ng.gain.linearRampToValueAtTime(0.45, now + 3);
-  noise.connect(bp);
-  bp.connect(ng);
-  ng.connect(master);
-  noise.start();
-  nodes.push(noise);
-
-  // Deep sub hum
-  const sub = ac.createOscillator();
-  sub.type = 'sine';
-  sub.frequency.value = 60;
-  const subG = ac.createGain();
-  subG.gain.value = 0;
-  subG.gain.linearRampToValueAtTime(0.15, now + 2);
-  sub.connect(subG);
-  subG.connect(master);
-  sub.start();
-  nodes.push(sub);
-
-  // Warm harmonic shimmer
-  [196, 293.66, 440].forEach((freq, i) => {
-    const osc = ac.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    osc.detune.value = (Math.random() - 0.5) * 8;
-    const g = ac.createGain();
-    g.gain.value = 0;
-    g.gain.linearRampToValueAtTime(0.06 - i * 0.015, now + 3 + i * 0.5);
-    osc.connect(g);
-    g.connect(master);
-    osc.start();
-    nodes.push(osc);
-  });
-
-  return { nodes };
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const g = ac.createGain();
+  g.gain.value = 0;
+  g.gain.linearRampToValueAtTime(1.0, now + 2);
+  src.connect(g);
+  g.connect(master);
+  src.start();
+  nodes.push(src);
+  gains.push(g);
+  return { nodes, gains };
 }
 
-// ===== CITIZEN SCIENCE: Discovery pings over drone =====
+// ===== CITIZEN SCIENCE: Audified THEMIS data =====
 function citizenScienceSound(ac, master) {
   const nodes = [];
+  const gains = [];
   const now = ac.currentTime;
+  const buf = bufferCache['audio/mp3/THE_20120302_Cleaned_MAX.mp3'];
 
-  // Background drone (magnetosphere)
-  const hum = ac.createOscillator();
-  hum.type = 'triangle';
-  hum.frequency.value = 110;
-  const humG = ac.createGain();
-  humG.gain.value = 0;
-  humG.gain.linearRampToValueAtTime(0.08, now + 1);
-  hum.connect(humG);
-  humG.connect(master);
-  hum.start();
-  nodes.push(hum);
-
-  // Teal-colored reverb
-  const conv = ac.createConvolver();
-  conv.buffer = makeReverb(ac, 2.5, 2.2);
-  const revG = ac.createGain();
-  revG.gain.value = 0.5;
-  conv.connect(revG);
-  revG.connect(master);
-
-  // Discovery pings
-  const pitches = [523.25, 659.25, 783.99, 1046.5, 587.33, 698.46];
-  for (let i = 0; i < 24; i++) {
-    const t = now + 0.3 + i * 0.55 + Math.random() * 0.25;
-    const freq = pitches[Math.floor(Math.random() * pitches.length)];
-    const osc = ac.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
+  if (buf) {
+    const src = ac.createBufferSource();
+    src.buffer = buf;
     const g = ac.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.06 + Math.random() * 0.09, t + 0.015);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
-    osc.connect(g);
-    g.connect(conv);
+    g.gain.value = 0;
+    g.gain.linearRampToValueAtTime(0.75, now + 0.5);
+    src.connect(g);
     g.connect(master);
-    osc.start(t);
-    osc.stop(t + 1);
-    nodes.push(osc);
+    src.start();
+    nodes.push(src);
+    gains.push(g);
+    return { nodes, gains, duration: buf.duration };
   }
 
-  return { nodes };
+  // Fallback if not yet loaded — play silence briefly, then retry will work
+  return { nodes, gains, duration: 0.1 };
 }
 
-// ===== STEM-MUSIC: Sequencer groove =====
-function stemMusicSound(ac, master) {
-  const nodes = [];
-  const now = ac.currentTime;
-  const bpm = 120;
+// ===== STEM-MUSIC: Pattern generation + playback =====
+export function generateStemPattern() {
+  const bpm = 110 + Math.floor(Math.random() * 30);
   const step = 60 / bpm / 2;
+
+  // Kick — biased toward on-beats (0, 4, 8, 12)
+  const kick = new Array(16).fill(0);
+  kick[0] = 1; // always beat 1
+  for (let i = 1; i < 16; i++) {
+    const onBeat = i % 4 === 0;
+    kick[i] = Math.random() < (onBeat ? 0.6 : 0.1) ? 1 : 0;
+  }
+
+  // Hat — biased toward off-beats (odd steps)
+  const hat = new Array(16).fill(0);
+  for (let i = 0; i < 16; i++) {
+    const offBeat = i % 2 === 1;
+    hat[i] = Math.random() < (offBeat ? 0.5 : 0.15) ? 1 : 0;
+  }
+
+  // Melody
+  const scales = [
+    [261.63, 293.66, 329.63, 392, 440],
+    [293.66, 329.63, 392, 440, 523.25],
+    [349.23, 392, 440, 523.25, 587.33],
+  ];
+  const scale = scales[Math.floor(Math.random() * scales.length)];
+  // 10 pitches (5 base + 5 octave-up) sorted high→low, paired into 5 rows
+  const allPitches = [...scale, ...scale.map(f => f * 2)].sort((a, b) => b - a); // 10 pitches
+  const melodyRows = [0,1,2,3,4].map(() => new Array(16).fill(0)); // 5 rows
+  const melodyFreqs = new Array(16).fill(0);
+
+  const noteCount = 6 + Math.floor(Math.random() * 3);
+  const waveTypes = ['sawtooth', 'triangle', 'square'];
+  const waveType = waveTypes[Math.floor(Math.random() * waveTypes.length)];
+
+  for (let i = 0; i < noteCount; i++) {
+    const stepIdx = i * 2;
+    if (stepIdx >= 16) break;
+    const baseFreq = scale[Math.floor(Math.random() * scale.length)];
+    const freq = Math.random() < 0.3 ? baseFreq * 2 : baseFreq;
+    const pitchIdx = allPitches.indexOf(freq);
+    // 10 pitches → 5 rows: pitches 0,1 → row 0 (highest), 2,3 → row 1, etc.
+    const rowIdx = Math.floor(pitchIdx / 2);
+    if (rowIdx >= 0 && rowIdx < 5) melodyRows[rowIdx][stepIdx] = 1;
+    melodyFreqs[stepIdx] = freq;
+  }
+
+  return { kick, hat, melodyRows, melodyFreqs, pitches: allPitches, waveType, bpm, step, steps: 16 };
+}
+
+async function stemMusicSound(ac, master, prePattern) {
+  const pat = prePattern || generateStemPattern();
+  const nodes = [];
+  const gains = [];
+  const step = pat.step;
 
   // Reverb
   const conv = ac.createConvolver();
@@ -167,61 +199,54 @@ function stemMusicSound(ac, master) {
   conv.connect(revG);
   revG.connect(master);
 
-  // Kick pattern
-  const kickPattern = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
-  kickPattern.forEach((hit, i) => {
-    if (!hit) return;
-    const t = now + i * step + 0.2;
-    const osc = ac.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(120, t);
-    osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
-    const g = ac.createGain();
-    g.gain.setValueAtTime(0.25, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-    osc.connect(g);
-    g.connect(master);
-    osc.start(t);
-    osc.stop(t + 0.4);
-    nodes.push(osc);
-  });
-
-  // Hi-hat (noise burst) pattern
-  const hatPattern = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,1,1,0];
-  const hatBuf = makeNoise(ac, 0.1);
-  hatPattern.forEach((hit, i) => {
+  // Kicks (space kick sample)
+  const kickBuf = await loadBuffer('audio/mp3/Kick_Processed_Final__WIND_BGSE_z_2007_08_13_LFEvent_CLEANED_ISOLATED_SHORT.mp3');
+  const now = ac.currentTime;
+  pat.kick.forEach((hit, i) => {
     if (!hit) return;
     const t = now + i * step + 0.2;
     const src = ac.createBufferSource();
-    src.buffer = hatBuf;
-    const hp = ac.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 8000;
+    src.buffer = kickBuf;
     const g = ac.createGain();
-    g.gain.setValueAtTime(0.08, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
-    src.connect(hp);
-    hp.connect(g);
+    g.gain.setValueAtTime(0.8, t);
+    src.connect(g);
     g.connect(master);
     src.start(t);
     nodes.push(src);
   });
 
-  // Melodic space tone
-  const melody = [392, 440, 523.25, 440, 392, 349.23, 392, 440];
-  melody.forEach((freq, i) => {
-    const t = now + i * step * 2 + 0.2;
+  // Hats (solar shaker sample)
+  const hatBuf = await loadBuffer('audio/mp3/Solar_Shaker_1.mp3');
+  pat.hat.forEach((hit, i) => {
+    if (!hit) return;
+    const t = now + i * step + 0.2;
+    const src = ac.createBufferSource();
+    src.buffer = hatBuf;
+    src.playbackRate.value = 1.5 + Math.random();
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.5, t);
+    src.connect(g);
+    g.connect(master);
+    src.start(t);
+    nodes.push(src);
+  });
+
+  // Melody
+  pat.melodyFreqs.forEach((freq, i) => {
+    if (!freq) return;
+    const t = now + i * step + 0.2 + (Math.random() - 0.5) * step * 0.3;
     const osc = ac.createOscillator();
-    osc.type = 'sawtooth';
+    osc.type = pat.waveType;
     osc.frequency.value = freq;
+    osc.detune.value = (Math.random() - 0.5) * 10;
     const lp = ac.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 2000;
-    lp.Q.value = 3;
+    lp.frequency.value = 1500 + Math.random() * 1500;
+    lp.Q.value = 2 + Math.random() * 3;
     const g = ac.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.06, t + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.001, t + step * 1.8);
+    g.gain.linearRampToValueAtTime(0.04 + Math.random() * 0.03, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, t + step * 1.5 + Math.random() * step);
     osc.connect(lp);
     lp.connect(g);
     g.connect(conv);
@@ -231,12 +256,16 @@ function stemMusicSound(ac, master) {
     nodes.push(osc);
   });
 
-  return { nodes };
+  gains.push(revG);
+  const duration = 16 * step + 0.2;
+  const pattern = { ...pat, startTime: now + 0.2 };
+  return { nodes, gains, duration, pattern };
 }
 
 // ===== PLANETARIUM: Immersive dome atmosphere =====
 function planetariumSound(ac, master) {
   const nodes = [];
+  const gains = [];
   const now = ac.currentTime;
 
   // Deep spatial reverb
@@ -272,6 +301,7 @@ function planetariumSound(ac, master) {
     g.connect(master);
     osc.start();
     nodes.push(osc, trem);
+    gains.push(g);
   });
 
   // Sub bass pulse
@@ -293,6 +323,7 @@ function planetariumSound(ac, master) {
   subG.connect(master);
   sub.start();
   nodes.push(sub, subLfo);
+  gains.push(subG);
 
   // Sparkle pings (stars)
   for (let i = 0; i < 15; i++) {
@@ -312,7 +343,8 @@ function planetariumSound(ac, master) {
     nodes.push(osc);
   }
 
-  return { nodes };
+  gains.push(revG);
+  return { nodes, gains };
 }
 
 const generators = {
@@ -322,38 +354,106 @@ const generators = {
   'planetarium': planetariumSound
 };
 
-export function play(id) {
-  if (activeNodes[id]) {
-    stop(id);
-    return false;
-  }
+let pendingStemPattern = null;
+
+export function setStemPattern(pat) {
+  pendingStemPattern = pat;
+}
+
+export async function play(id) {
+  if (activeNodes[id]) return false; // already playing
 
   const ac = getContext();
+  preload();
   const master = createMaster(ac);
   const gen = generators[id];
   if (!gen) return false;
 
-  const result = gen(ac, master);
+  // For stem-music, pass the pending pattern (from the displayed grid)
+  const result = (id === 'stem-music')
+    ? await gen(ac, master, pendingStemPattern)
+    : await gen(ac, master);
+  if (id === 'stem-music') pendingStemPattern = null; // used it, next play gets fresh
+  // Store the exact audio-clock end time for precise sync
+  if (result.duration) {
+    result.endTime = ac.currentTime + result.duration;
+  }
+  // Attach analyser for stem-music oscilloscope
+  if (id === 'stem-music') {
+    stemAnalyser = ac.createAnalyser();
+    stemAnalyser.fftSize = 2048;
+    master.connect(stemAnalyser);
+  }
+  // Attach analyser for hero audio reactivity
+  if (id === 'hero') {
+    heroAnalyser = ac.createAnalyser();
+    heroAnalyser.fftSize = 256;
+    master.connect(heroAnalyser);
+  }
   activeNodes[id] = { ...result, master };
-  return true;
+  return result.duration || true;
 }
 
 export function stop(id) {
-  if (!activeNodes[id]) return;
-  const { nodes, master } = activeNodes[id];
-  const ac = getContext();
-  const now = ac.currentTime;
+  const fadeTime = 0.25; // time constant in seconds — fast fade
+  const entry = activeNodes[id];
+  if (!entry) return Promise.resolve();
 
-  master.gain.linearRampToValueAtTime(0, now + 0.5);
-
-  setTimeout(() => {
-    nodes.forEach(n => { try { n.stop(); } catch(e) {} });
-    try { master.disconnect(); } catch(e) {}
-  }, 600);
-
+  const { nodes, gains = [], master } = entry;
   delete activeNodes[id];
+  if (id === 'stem-music') stemAnalyser = null;
+  if (id === 'hero') heroAnalyser = null;
+
+  try {
+    const ac = getContext();
+    const now = ac.currentTime;
+
+    // Fade each individual gain node (before the compressor can interfere)
+    for (const g of gains) {
+      try {
+        g.gain.cancelScheduledValues(now);
+        g.gain.setValueAtTime(g.gain.value, now);
+        g.gain.setTargetAtTime(0, now, fadeTime);
+      } catch(e) { /* automation may conflict — keep going */ }
+    }
+
+    // Also fade master as a safety net
+    try {
+      master.gain.cancelScheduledValues(now);
+      master.gain.setValueAtTime(master.gain.value, now);
+      master.gain.setTargetAtTime(0, now, fadeTime);
+    } catch(e) {}
+  } catch(e) {}
+
+  return new Promise(resolve => {
+    setTimeout(() => {
+      nodes.forEach(n => { try { n.stop(); } catch(e) {} });
+      try { master.disconnect(); } catch(e) {}
+      resolve();
+    }, 800); // ~3 time constants at 0.25s = 0.75s, round up
+  });
+}
+
+export function getEndTime(id) {
+  return activeNodes[id]?.endTime || null;
+}
+
+export function now() {
+  return ctx ? ctx.currentTime : 0;
+}
+
+export function getStemAnalyser() {
+  return stemAnalyser;
+}
+
+export function getHeroAnalyser() {
+  return heroAnalyser;
+}
+
+export function getStemPattern() {
+  return activeNodes['stem-music']?.pattern || null;
 }
 
 export function stopAll() {
-  Object.keys(activeNodes).forEach(stop);
+  Object.keys(activeNodes).forEach(id => stop(id));
 }
