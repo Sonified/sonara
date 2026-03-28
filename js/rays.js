@@ -43,14 +43,17 @@
     const textL = spanRect.left - canvasRect.left;
 
     // Light sweeps fully left to right across all letters
-    const lightProgress = (time * 0.4) % 1;
+    // Sweep L-R over 60% of cycle, pause for 40%
+    const cycle = (time * 0.3) % 1;
+    const lightProgress = cycle < 0.6 ? cycle / 0.6 : 1;
     const lightX = textL - textW * 0.6 + lightProgress * textW * 2.2;
     const lightY = textCY;
     // Fade in/out at edges so light builds as it approaches letters
-    const edgeFade = lightProgress < 0.2 ? lightProgress / 0.2 
-                   : lightProgress > 0.8 ? (1 - lightProgress) / 0.2 
+    const edgeFade = lightProgress < 0.15 ? lightProgress / 0.15 
+                   : lightProgress > 0.85 ? (1 - lightProgress) / 0.15 
                    : 1;
-    const breath = (0.7 + 0.2 * Math.sin(time * 1.5)) * edgeFade;
+    const pauseFade = cycle >= 0.6 ? Math.max(0, 1 - (cycle - 0.6) / 0.1) : 1;
+    const breath = (0.7 + 0.2 * Math.sin(time * 1.5)) * edgeFade * pauseFade;
 
     // Draw text on offscreen
     oc.clearRect(0, 0, w, h);
@@ -104,7 +107,8 @@
 
     // Sparkle particles only when light is over the letters
     // Only sparkle when light is actually over the letters
-    const overLetters = lightX >= textL && lightX <= textL + textW;
+    const sweeping = cycle < 0.6;
+    const overLetters = sweeping && lightX >= textL && lightX <= textL + textW;
     updateParticles(lightX, lightY, overLetters ? 0.8 : 0, textW);
     drawParticles(ctx);
 
