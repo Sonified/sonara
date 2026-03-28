@@ -92,12 +92,12 @@ function initHeroCanvas() {
       const dmx = mouseX * scaleX - p.x;
       const dmy = mouseY * scaleY - p.y;
       const mdist = Math.sqrt(dmx * dmx + dmy * dmy);
-      if (mdist < 400) {
-        const force = (1 - mdist / 400) * 0.0005;
+      if (mdist < 300) {
+        const force = (1 - mdist / 300) * 0.00015;
         // Tangential component for swirl
         const tx = -dmy;
         const ty = dmx;
-        const swirl = (1 - mdist / 400) * 0.0004;
+        const swirl = (1 - mdist / 300) * 0.00012;
         p.vx += dmx * force + tx * swirl;
         p.vy += dmy * force + ty * swirl;
       }
@@ -117,6 +117,98 @@ function initHeroCanvas() {
   window.addEventListener('resize', () => { resize(); init(); });
   resize();
   init();
+  draw();
+}
+
+// ===== Vision: Drifting luminous nebula orbs =====
+function initVisionCanvas() {
+  const canvas = document.getElementById('vision-canvas');
+  if (!canvas) return;
+  const c = canvas.getContext('2d');
+  let w, h;
+  let time = 0;
+
+  const ORB_COUNT = 35;
+  let orbs = [];
+
+  function resize() {
+    w = canvas.width = canvas.offsetWidth;
+    h = canvas.height = canvas.offsetHeight;
+    initOrbs();
+  }
+
+  function initOrbs() {
+    orbs = [];
+    for (let i = 0; i < ORB_COUNT; i++) {
+      const depth = Math.random(); // 0 = far, 1 = near
+      orbs.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        baseRadius: 80 + depth * 180,
+        depth,
+        driftX: (Math.random() - 0.5) * 0.2 * (0.3 + depth * 0.7),
+        driftY: (Math.random() - 0.5) * 0.15 * (0.3 + depth * 0.7),
+        wanderPhaseX: Math.random() * Math.PI * 2,
+        wanderPhaseY: Math.random() * Math.PI * 2,
+        wanderSpeed: 0.1 + Math.random() * 0.15,
+        wanderAmp: 5 + depth * 10,
+        phase: Math.random() * Math.PI * 2,
+        breatheSpeed: 0.15 + Math.random() * 0.3,
+        life: Math.random() * Math.PI * 2, // start at random point in lifecycle
+        lifeSpeed: 0.0015 + Math.random() * 0.0025, // how fast they fade in/out
+        hue: Math.random() < 0.6
+          ? 40 + Math.random() * 10   // warm gold
+          : 210 + Math.random() * 20,  // cool blue
+        sat: 30 + Math.random() * 40,
+      });
+    }
+    // Sort by depth so far orbs draw first
+    orbs.sort((a, b) => a.depth - b.depth);
+  }
+
+  function draw() {
+    c.clearRect(0, 0, w, h);
+    time += 0.003;
+
+    orbs.forEach(orb => {
+      // Lifecycle: smooth fade in and out
+      orb.life += orb.lifeSpeed;
+      const lifecycle = Math.max(0, Math.sin(orb.life)); // 0 → 1 → 0, clamped
+
+      const breathe = Math.sin(time * orb.breatheSpeed + orb.phase) * 0.2 + 0.8;
+      const radius = orb.baseRadius * breathe;
+      const alpha = (0.04 + orb.depth * 0.08) * breathe * lifecycle;
+
+      const grad = c.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, radius);
+      grad.addColorStop(0, `hsla(${orb.hue}, ${orb.sat}%, 65%, ${alpha})`);
+      grad.addColorStop(0.35, `hsla(${orb.hue}, ${orb.sat}%, 50%, ${alpha * 0.5})`);
+      grad.addColorStop(0.7, `hsla(${orb.hue}, ${orb.sat}%, 40%, ${alpha * 0.15})`);
+      grad.addColorStop(1, 'transparent');
+
+      c.fillStyle = grad;
+      c.beginPath();
+      c.arc(orb.x, orb.y, radius, 0, Math.PI * 2);
+      c.fill();
+
+      // Drift + organic wander
+      const wx = Math.sin(time * orb.wanderSpeed + orb.wanderPhaseX) * orb.wanderAmp * 0.01;
+      const wy = Math.cos(time * orb.wanderSpeed * 0.7 + orb.wanderPhaseY) * orb.wanderAmp * 0.01;
+      orb.x += orb.driftX + wx;
+      orb.y += orb.driftY + wy;
+
+      // Wrap with padding
+      const pad = radius;
+      if (orb.x < -pad) orb.x = w + pad;
+      if (orb.x > w + pad) orb.x = -pad;
+      if (orb.y < -pad) orb.y = h + pad;
+      if (orb.y > h + pad) orb.y = -pad;
+    });
+
+    requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
   draw();
 }
 
@@ -332,6 +424,7 @@ function initSynthWave() {
 // Init all
 export function initVisuals() {
   initHeroCanvas();
+  initVisionCanvas();
   initCSCanvas();
   initDomeCanvas();
   initSynthWave();

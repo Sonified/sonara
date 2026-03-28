@@ -36,17 +36,17 @@
   const particles = [];
 
   function spawnParticle(x, y) {
-    if (particles.length > 25) return;
+    if (particles.length > 50) return;
     const angle = Math.random() * Math.PI * 2;
-    const speed = 0.3 + Math.random() * 0.8;
+    const speed = 0.08 + Math.random() * 0.2;
     particles.push({
-      x: x + (Math.random() - 0.5) * 60,
-      y: y + (Math.random() - 0.5) * 100,
+      x: x + (Math.random() - 0.5) * 320,
+      y: y + (Math.random() - 0.5) * 320,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       life: 1,
-      decay: 0.02 + Math.random() * 0.03,
-      size: 1.5 + Math.random() * 2.5
+      decay: 0.0025 + Math.random() * 0.005,
+      size: 0.8 + Math.random() * 1.2
     });
   }
 
@@ -60,10 +60,35 @@
     }
   }
 
-  function drawParticles() {
+  function drawParticles(textR, fadeZone) {
     ctx.globalCompositeOperation = 'screen';
+
+    // Draw lines between nearby particles
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const a = particles[i], b = particles[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 120) {
+          const lineAlpha = (1 - dist / 120) * Math.min(a.life, b.life) * 0.12;
+          ctx.globalAlpha = lineAlpha;
+          ctx.strokeStyle = 'rgba(255, 230, 170, 1)';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw particles
     for (const p of particles) {
-      ctx.globalAlpha = p.life * 0.25;
+      let alpha = p.life * 0.25;
+      if (p.x > textR - fadeZone) {
+        alpha *= Math.max(0, (textR - p.x) / fadeZone);
+      }
+      ctx.globalAlpha = alpha;
       ctx.fillStyle = 'rgba(255, 230, 170, 1)';
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
@@ -94,14 +119,14 @@
     const sweeping = cycle < 0.6;
     const lightProgress = sweeping ? cycle / 0.6 : 1;
 
-    // Light position: starts off-left, ends off-right
-    const lightX = textL - textW * 0.6 + lightProgress * textW * 2.2;
+    // Light position: sweeps across the text bounds with a small margin
+    const lightX = textL - textW * 0.12 + lightProgress * textW * 1.07;
     const lightY = textCY;
 
     // --- Breath: fade in at start, fade out at end + during pause ---
-    let breath = 0.8;
-    if (lightProgress < 0.15) breath *= lightProgress / 0.15;
-    if (lightProgress > 0.85) breath *= (1 - lightProgress) / 0.15;
+    let breath = 0.55;
+    if (lightProgress < 0.3) breath *= lightProgress / 0.3;
+    if (lightProgress > 0.55) breath *= (1 - lightProgress) / 0.45;
     if (!sweeping) breath *= Math.max(0, 1 - (cycle - 0.6) / 0.1);
 
     // --- Draw glow text on offscreen ---
@@ -152,21 +177,21 @@
     // --- the radial mask overlaps the text area ---
     // The glow is brightest at lightX. It hits the text when lightX is within
     const glowRadius = textW * 0.6;
-    const glowHitsText = sweeping && breath > 0.1 &&
+    const glowHitsText = sweeping && breath > 0.01 &&
       lightX + glowRadius > textL && lightX - glowRadius < textR;
 
     if (glowHitsText && Math.random() < 0.5) {
-      spawnParticle(lightX, lightY);
+      spawnParticle(lightX + textW * 0.25, lightY);
     }
 
     tickParticles();
-    drawParticles();
+    drawParticles(textR, textW * 0.15);
 
     requestAnimationFrame(draw);
   }
 
   window.addEventListener('resize', resize);
   document.fonts.ready.then(() => {
-    setTimeout(() => { resize(); draw(); }, 800);
+    resize(); draw();
   });
 })();

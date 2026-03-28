@@ -32,8 +32,8 @@ import { initVisuals } from './visuals.js';
   }
 
   // ===== Sections + Dot Nav =====
-  const allSections = Array.from(document.querySelectorAll('.section'));
-  const sectionNames = ['SONARA', 'Vision', 'Citizen Science', 'STEM + Music', 'Planetarium', 'Team', 'Partners'];
+  const allSections = Array.from(document.querySelectorAll('.section')).filter(s => getComputedStyle(s).display !== 'none');
+  const sectionNames = ['SONARA', 'The Vision', 'Education & Communication', 'Citizen Science', 'STEM + Music', 'Get Involved'];
 
   const dotNav = document.createElement('nav');
   dotNav.className = 'dot-nav';
