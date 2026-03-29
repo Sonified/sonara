@@ -5,6 +5,16 @@
   box-sizing: border-box;
 }
 
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 :root {
   --bg: #060608;
   --bg-subtle: #0c0c10;

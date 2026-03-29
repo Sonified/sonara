@@ -39,8 +39,8 @@ function initHeroCanvas() {
 
   let w, h;
   const PARTICLE_COUNT = 500;
-  const MAX_PARTICLES = 2500;
-  const THROTTLE_START = 2000; // start culling congested particles above this
+  const MAX_PARTICLES = 3500;
+  const THROTTLE_START = 2800; // start culling congested particles above this
   let particles = [];
   let time = 0;
   let lineIntensity = 0; // slow-smoothed audio for connection brightness
@@ -187,7 +187,7 @@ function initHeroCanvas() {
 
   // --- Buffers ---
   const PFLOATS = 4; // x, y, size, alpha per particle
-  const BUFFER_CAP = 4000; // max particles the GPU buffer can hold
+  const BUFFER_CAP = 5000; // max particles the GPU buffer can hold
   const particleData = new Float32Array(BUFFER_CAP * PFLOATS);
   const particleBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
@@ -360,6 +360,7 @@ function initHeroCanvas() {
           const idx = autoIndices[(Math.random() * autoIndices.length) | 0];
           const p = particles[idx];
           p.life = 1;
+          p.culled = true;
           p.baseAlpha = p.alpha;
           p.decay = 0.008 + Math.random() * 0.008; // fade over ~60-120 frames
         }
@@ -531,10 +532,10 @@ function initHeroCanvas() {
       if (mouseSwirlMix > 0.001) {
         const dmx = mx - p.x, dmy = my - p.y;
         const d2 = dmx * dmx + dmy * dmy;
-        if (d2 < 211600) {
+        if (d2 < 336400) {
           const mdist = Math.sqrt(d2);
-          const proximity = 1 - mdist / 460;
-          const force = proximity * 0.00008 * mouseSwirlMix;
+          const proximity = 1 - mdist / 580;
+          const force = proximity * 0.00006 * mouseSwirlMix;
           const swirl = proximity * 0.00008 * mouseSwirlMix;
           p.vx += dmx * force + dmy * swirl;
           p.vy += dmy * force + (-dmx) * swirl;
@@ -543,13 +544,13 @@ function initHeroCanvas() {
 
       p.vx *= 0.985;
       p.vy *= 0.985;
+      // Mirror wrap: exit lower-right → enter lower-left, flip vy so it comes back up
       let wrapped = false;
       if (p.x < 0) { p.x = w; wrapped = true; }
-      if (p.x > w) { p.x = 0; wrapped = true; }
-      if (p.y < 0) { p.y = h; wrapped = true; }
-      if (p.y > h) { p.y = 0; wrapped = true; }
+      else if (p.x > w) { p.x = 0; wrapped = true; }
+      if (p.y < 0) { p.y = 0; p.x = w - p.x; p.vy = Math.abs(p.vy); wrapped = true; }
+      else if (p.y > h) { p.y = h; p.x = w - p.x; p.vy = -Math.abs(p.vy); wrapped = true; }
       if (wrapped) {
-        // Kill any fading connections to avoid screen-spanning lines
         const pid = p.pid;
         for (const [ck] of connFade) {
           if (ck.startsWith(pid + '_') || ck.endsWith('_' + pid)) {
@@ -597,7 +598,8 @@ function initHeroCanvas() {
       gl.disableVertexAttribArray(pLoc.alpha);
     }
 
-    const burstCount = particles.length - autoCount;
+    const culledCount = particles.reduce((n, p) => n + (p.culled ? 1 : 0), 0);
+    const burstCount = particles.length - autoCount - culledCount;
     counterEl.textContent = `A:${autoCount} U:${burstCount} T:${particles.length}`;
     requestAnimationFrame(draw);
   }
@@ -617,11 +619,11 @@ function initHeroCanvas() {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.3 + Math.random() * 0.6;
-      const baseAlpha = 0.3 + Math.random() * 0.2;
+      const baseAlpha = 0.3 + Math.random() * 0.4;
       particles.push({
         pid: nextPid++,
-        x: cx + (Math.random() - 0.5) * 20,
-        y: cy + (Math.random() - 0.5) * 20,
+        x: cx + (Math.random() - 0.5) * 50,
+        y: cy + (Math.random() - 0.5) * 50,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         r: Math.random() * 2 + 0.5,
@@ -630,7 +632,7 @@ function initHeroCanvas() {
         phase: Math.random() * Math.PI * 2,
         life: 1,
         decay: 0.0003 + Math.random() * 0.0007,
-        age: 0, fadeIn: 10 + Math.floor(Math.random() * 10),
+        age: 0, fadeIn: 15 + Math.floor(Math.random() * 15),
         rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
       });
     }
