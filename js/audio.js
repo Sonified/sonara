@@ -284,12 +284,19 @@ export function generateStemPattern() {
   const bpm = 125;
   const step = 60 / bpm / 2;
 
-  // Kick — biased toward on-beats (0, 4, 8, 12)
+  // Kick — more likely overall, especially on downbeats (0, 4, 8, 12)
   const kick = new Array(16).fill(0);
   kick[0] = 1; // always beat 1
   for (let i = 1; i < 16; i++) {
-    const onBeat = i % 4 === 0;
-    kick[i] = Math.random() < (onBeat ? 0.6 : 0.1) ? 1 : 0;
+    const downBeat = i % 4 === 0;
+    const eighth = i % 2 === 0;
+    const chance = downBeat ? 0.9 : (eighth ? 0.38 : 0.24);
+    kick[i] = Math.random() < chance ? 1 : 0;
+  }
+  if (kick.reduce((sum, v) => sum + v, 0) < 2) {
+    const fallbackSlots = [4, 8, 12, 2, 6, 10, 14];
+    const slot = fallbackSlots.find(idx => !kick[idx]);
+    if (slot !== undefined) kick[slot] = 1;
   }
 
   // Hat — biased toward off-beats (odd steps)
@@ -424,9 +431,9 @@ function seqTriggerStep(pat) {
   if (pat.hat[col] && seqHatBuf) {
     const src = seqAc.createBufferSource();
     src.buffer = seqHatBuf;
-    src.playbackRate.value = 1.8 + Math.random();
+    src.playbackRate.value = 2.2 + Math.random() * 1.3;
     const g = seqAc.createGain();
-    g.gain.value = 0.25;
+    g.gain.value = 0.2;
     src.connect(g);
     g.connect(seqMaster);
     src.start(t);

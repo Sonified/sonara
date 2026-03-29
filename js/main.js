@@ -268,7 +268,6 @@ import { initVisuals } from './visuals.js?v=8';
       btn.style.backgroundColor = '';
       btn.style.boxShadow = '';
       fadingButtons.delete(btn);
-      if (soundId === 'hero') clearHeroHintCopy();
       if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
     };
     if (p && typeof p.then === 'function') p.then(cleanup);
@@ -282,7 +281,6 @@ import { initVisuals } from './visuals.js?v=8';
     btn.style.boxShadow = '';
     fadingButtons.delete(btn);
     autoEndTimers.delete(btn);
-    if (soundId === 'hero') clearHeroHintCopy();
     if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
     stop(soundId);
   }
@@ -389,22 +387,22 @@ import { initVisuals } from './visuals.js?v=8';
   const scrollHint = document.querySelector('.scroll-hint');
   let heroHintCopyTimer = null;
 
-  function clearHeroHintCopy() {
+  function clearHeroHintCopy(removeVisible = false) {
     if (heroHintCopyTimer) {
       clearTimeout(heroHintCopyTimer);
       heroHintCopyTimer = null;
     }
-    if (scrollHint) scrollHint.classList.remove('show-copy');
+    if (removeVisible && scrollHint) scrollHint.classList.remove('show-copy');
   }
 
   function scheduleHeroHintCopy() {
     if (!scrollHint || heroHintCopyTimer || scrollHint.dataset.dismissed === '1') return;
     heroHintCopyTimer = setTimeout(() => {
       heroHintCopyTimer = null;
-      if (heroBtn && heroBtn.classList.contains('playing') && scrollHint.classList.contains('visible')) {
+      if (scrollHint.classList.contains('visible')) {
         scrollHint.classList.add('show-copy');
       }
-    }, 15000);
+    }, 10000);
   }
 
   if (scrollHint) {
@@ -423,7 +421,7 @@ import { initVisuals } from './visuals.js?v=8';
           scrollHint.classList.remove('pulsing');
           scrollHint.classList.remove('show-copy');
           scrollHint.dataset.dismissed = '1';
-          clearHeroHintCopy();
+          clearHeroHintCopy(true);
           hintObs.disconnect();
         }
       });

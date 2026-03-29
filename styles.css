@@ -220,7 +220,7 @@ a:hover { opacity: 0.7; }
 .hero-title .glow-wrap {
   display: inline-block;
   position: relative;
-  background: linear-gradient(135deg, var(--text) 0%, var(--accent) 72%);
+  background: linear-gradient(135deg, rgba(206, 195, 170, 0.78) 0%, var(--accent) 72%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -275,21 +275,35 @@ a:hover { opacity: 0.7; }
 
 .hero-expansion {
   font-family: var(--font-mono);
-  font-size: clamp(0.7rem, 1.2vw, 0.9rem);
-  color: rgba(190, 178, 146, 0.72);
-  letter-spacing: 0.12em;
+  /* previous:
+  font-size: clamp(1.14rem, 1.95vw, 1.42rem);
+  letter-spacing: 0.2em;
+  */
+  font-size: clamp(1.36rem, 2.39vw, 1.89rem);
+  color: rgba(208, 182, 122, 0.9);
+  font-weight: 420;
+  letter-spacing: 0.235em;
   margin-bottom: 1.5rem;
   opacity: 0;
   animation: fadeUp 1s ease forwards 0.7s;
 }
 
+.hero-expansion-lead {
+  font-weight: 700;
+}
+
+.hero-expansion-strong {
+  font-weight: 700;
+}
+
 .hero-tagline {
   font-size: clamp(1rem, 2vw, 1.35rem);
-  color: rgba(198, 186, 152, 0.72);
-  font-weight: 300;
+  color: rgba(226, 216, 188, 0.94);
+  font-weight: 360;
+  font-style: italic;
   width: min(440px, 88vw);
   line-height: 1.6;
-  transform: translateY(10px);
+  margin-top: 22px;
   margin-bottom: 3rem;
   opacity: 0;
   animation: fadeUp 1s ease forwards 0.9s;

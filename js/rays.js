@@ -80,7 +80,7 @@
         color += s.rgb * s.a * weight;
       }
 
-      color *= u_breath * 0.22;
+      color *= u_breath * 0.165;
       color = color / (1.0 + color);
       float alpha = (color.r + color.g + color.b) / 3.0;
 
@@ -160,7 +160,7 @@
     if (particles.length > MAX_PARTICLES) return;
     const angle = (Math.random() - 0.5) * 1.6;
     const speed = 0.12 + Math.random() * 0.38;
-    const baseAlpha = 0.3 + Math.random() * 0.3;
+    const baseAlpha = 0.5 + Math.random() * 0.1;
     particles.push({
       x: lx + tw * 0.08 + (Math.random() - 0.5) * tw * 0.18,
       y: ly + (Math.random() - 0.5) * 520,
@@ -169,7 +169,7 @@
       alpha: baseAlpha,
       baseAlpha,
       life: 1,
-      decay: 0.0011 + Math.random() * 0.0021,
+      decay: 0.0017 + Math.random() * 0.0028,
       size: 1.8 + Math.random() * 3.4
     });
   }
@@ -195,7 +195,7 @@
         const dx = a.x - b.x, dy = a.y - b.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < 225) {
-          const lineAlpha = (1 - dist / 225) * Math.min(a.life, b.life) * 0.4;
+          const lineAlpha = (1 - dist / 225) * Math.min(a.life, b.life) * 0.3;
           pCtx.globalAlpha = lineAlpha;
           pCtx.strokeStyle = 'rgba(255, 230, 170, 1)';
           pCtx.lineWidth = 0.8;
