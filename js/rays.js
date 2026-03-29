@@ -1,24 +1,128 @@
 /**
- * Volumetric light rays + sparkle particles for SONARA title.
- * 
- * SIMPLE RULES:
- * - Light sweeps L-R, pauses, repeats
- * - Glow = radial zoom blur of text from light position
- * - Particles spawn ONLY where glow is visible (breath > 0), AT the glow position
- * - Particles die fast
+ * WebGL light rays + sparkle particles for the SONARA title.
  */
 
 (function() {
   const canvas = document.getElementById('rays-canvas');
   if (!canvas) return;
 
-  const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   let w, h;
-  let time = 0;
+  let time = -1.0;
+  let raysReady = false;
 
-  const offscreen = document.createElement('canvas');
-  const oc = offscreen.getContext('2d');
+  canvas.style.opacity = '0';
+
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false });
+  if (!gl) return;
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  const particleCanvas = document.createElement('canvas');
+  particleCanvas.style.cssText = canvas.style.cssText;
+  particleCanvas.style.position = 'absolute';
+  particleCanvas.style.top = '0';
+  particleCanvas.style.left = '0';
+  particleCanvas.style.width = '100%';
+  particleCanvas.style.height = '100%';
+  particleCanvas.style.pointerEvents = 'none';
+  particleCanvas.style.opacity = '0';
+  canvas.parentNode.appendChild(particleCanvas);
+  const pCtx = particleCanvas.getContext('2d');
+
+  const textCanvas = document.createElement('canvas');
+  const tc = textCanvas.getContext('2d');
+
+  const vertSrc = `
+    attribute vec2 a_pos;
+    varying vec2 v_uv;
+    void main() {
+      v_uv = a_pos * 0.5 + 0.5;
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+    }
+  `;
+
+  const fragSrc = `
+    precision mediump float;
+    varying vec2 v_uv;
+    uniform sampler2D u_text;
+    uniform vec2 u_origin;
+    uniform float u_strength;
+    uniform float u_breath;
+
+    const int SAMPLES = 40;
+
+    void main() {
+      vec2 uv = v_uv;
+      vec2 toPixel = uv - u_origin;
+      vec3 color = vec3(0.0);
+
+      for (int i = 0; i < SAMPLES; i++) {
+        float t = float(i) / float(SAMPLES);
+        float scale = 1.0 - t * u_strength;
+        vec2 sampleUV = u_origin + toPixel * scale;
+        float weight = 1.0 - t * 0.5;
+        vec4 s = texture2D(u_text, sampleUV);
+        color += s.rgb * s.a * weight;
+      }
+
+      color *= u_breath * 0.22;
+      color = color / (1.0 + color);
+      float alpha = (color.r + color.g + color.b) / 3.0;
+
+      gl_FragColor = vec4(color, alpha);
+    }
+  `;
+
+  function compileShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile:', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+
+  const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
+  if (!vs || !fs) return;
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
+  gl.useProgram(prog);
+
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  const uOrigin = gl.getUniformLocation(prog, 'u_origin');
+  const uStrength = gl.getUniformLocation(prog, 'u_strength');
+  const uBreath = gl.getUniformLocation(prog, 'u_breath');
+
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    1,
+    1,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    new Uint8Array([0, 0, 0, 0])
+  );
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
@@ -26,13 +130,15 @@
     h = rect.height;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    offscreen.width = w * dpr;
-    offscreen.height = h * dpr;
-    oc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    textCanvas.width = w * dpr;
+    textCanvas.height = h * dpr;
+    tc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    particleCanvas.width = w * dpr;
+    particleCanvas.height = h * dpr;
+    pCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  // --- Particles: dead simple ---
   const particles = [];
 
   function spawnParticle(x, y) {
@@ -64,9 +170,9 @@
   }
 
   function drawParticles(textR, fadeZone) {
-    ctx.globalCompositeOperation = 'screen';
+    pCtx.clearRect(0, 0, w, h);
+    pCtx.globalCompositeOperation = 'screen';
 
-    // Draw lines between nearby particles
     for (let i = 0; i < particles.length; i++) {
       for (let j = i + 1; j < particles.length; j++) {
         const a = particles[i], b = particles[j];
@@ -74,37 +180,36 @@
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < 120) {
           const lineAlpha = (1 - dist / 120) * Math.min(a.life, b.life) * 0.12;
-          ctx.globalAlpha = lineAlpha;
-          ctx.strokeStyle = 'rgba(255, 230, 170, 1)';
-          ctx.lineWidth = 0.5;
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
+          pCtx.globalAlpha = lineAlpha;
+          pCtx.strokeStyle = 'rgba(255, 230, 170, 1)';
+          pCtx.lineWidth = 0.5;
+          pCtx.beginPath();
+          pCtx.moveTo(a.x, a.y);
+          pCtx.lineTo(b.x, b.y);
+          pCtx.stroke();
         }
       }
     }
 
-    // Draw particles
     for (const p of particles) {
       const fadeInMult = Math.min(1, p.age / p.fadeIn);
       let alpha = p.life * 0.25 * fadeInMult;
       if (p.x > textR - fadeZone) {
         alpha *= Math.max(0, (textR - p.x) / fadeZone);
       }
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = 'rgba(255, 230, 170, 1)';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-      ctx.fill();
+      pCtx.globalAlpha = alpha;
+      pCtx.fillStyle = 'rgba(255, 230, 170, 1)';
+      pCtx.beginPath();
+      pCtx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      pCtx.fill();
     }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
+    pCtx.globalAlpha = 1;
+    pCtx.globalCompositeOperation = 'source-over';
   }
 
   function draw() {
-    time += 0.004;
-    ctx.clearRect(0, 0, w, h);
+    time += 0.0055;
+    if (time < 0) { requestAnimationFrame(draw); return; }
 
     const span = document.querySelector('.hero-title .glow-wrap');
     if (!span) { requestAnimationFrame(draw); return; }
@@ -113,73 +218,91 @@
     const spanRect = span.getBoundingClientRect();
     const style = getComputedStyle(span);
 
-    const textCY = (spanRect.top - canvasRect.top) + spanRect.height * 0.55;
+    const textCY = (spanRect.top - canvasRect.top) + spanRect.height * 0.58;
     const textW = spanRect.width;
     const textL = spanRect.left - canvasRect.left;
     const textR = textL + textW;
 
-    // --- Timing: sweep 60%, pause 40% ---
-    const cycle = (time * 0.3) % 1;
-    const sweeping = cycle < 0.6;
-    const lightProgress = sweeping ? cycle / 0.6 : 1;
+    const half = (time * 0.28) % 1;
+    const sweeping = half < 0.48;
+    const lightProgress = sweeping ? half / 0.48 : 1 + (half - 0.48) / 0.52 * 0.4;
 
-    // Light position: sweeps across the text bounds with a small margin
-    const lightX = textL - textW * 0.2 + lightProgress * textW * 1.07;
+    const lightX = textL - textW * 0.4 + lightProgress * textW * 1.6;
     const lightY = textCY;
 
-    // --- Breath: fade in at start, fade out at end + during pause ---
+    const smooth = t => Math.sin(t * Math.PI * 0.5);
     let breath = 0.55;
-    if (lightProgress < 0.3) breath *= lightProgress / 0.3;
-    if (lightProgress > 0.55) breath *= (1 - lightProgress) / 0.45;
-    if (!sweeping) breath *= Math.max(0, 1 - (cycle - 0.6) / 0.1);
-
-    // --- Draw glow text on offscreen ---
-    oc.clearRect(0, 0, w, h);
-    const fontSize = parseFloat(style.fontSize);
-    oc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
-    oc.textBaseline = 'middle';
-    oc.letterSpacing = style.letterSpacing;
-    oc.fillStyle = 'rgba(255, 230, 170, 1)';
-
-    const measured = oc.measureText('SONARA');
-    const scaleX = spanRect.width / measured.width;
-    oc.save();
-    oc.translate(textL, textCY);
-    oc.scale(scaleX, 1);
-    oc.textAlign = 'left';
-    oc.fillText('SONARA', 0, 0);
-    oc.restore();
-
-    // Mask to spotlight
-    oc.globalCompositeOperation = 'destination-in';
-    const mask = oc.createRadialGradient(lightX, lightY, 0, lightX, lightY, textW * 1.0);
-    mask.addColorStop(0, 'rgba(255,255,255,1)');
-    mask.addColorStop(0.15, 'rgba(255,255,255,0.8)');
-    mask.addColorStop(0.35, 'rgba(255,255,255,0.4)');
-    mask.addColorStop(0.6, 'rgba(255,255,255,0.1)');
-    mask.addColorStop(1, 'rgba(255,255,255,0)');
-    oc.fillStyle = mask;
-    oc.fillRect(0, 0, w, h);
-    oc.globalCompositeOperation = 'source-over';
-
-    // --- Zoom blur rays ---
-    ctx.globalCompositeOperation = 'screen';
-    for (let i = 0; i < 40; i++) {
-      const t = i / 40;
-      ctx.globalAlpha = (1 - t) * 0.085 * breath;
-      ctx.save();
-      ctx.translate(lightX, lightY);
-      ctx.scale(1 + t * 0.16, 1 + t * 0.16);
-      ctx.translate(-lightX, -lightY);
-      ctx.drawImage(offscreen, 0, 0, w, h);
-      ctx.restore();
+    if (lightX < textL) {
+      const t = Math.max(0, Math.min(1, 1 - (textL - lightX) / (textW * 0.6)));
+      breath *= smooth(t);
+    } else if (lightX > textR) {
+      const t = Math.max(0, Math.min(1, 1 - (lightX - textR) / (textW * 0.35)));
+      breath *= smooth(t);
     }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
+    if (!sweeping) {
+      const t = Math.max(0, Math.min(1, 1 - (half - 0.48) / 0.1));
+      breath *= smooth(t);
+    }
+    if (breath < 0.08) breath = 0;
 
-    // --- Particles: spawn where the GLOW is visible, which is where ---
-    // --- the radial mask overlaps the text area ---
-    // The glow is brightest at lightX. It hits the text when lightX is within
+    const maskX = lightX;
+
+    tc.clearRect(0, 0, w, h);
+    const fontSize = parseFloat(style.fontSize);
+    tc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+    tc.textBaseline = 'middle';
+    tc.letterSpacing = style.letterSpacing;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const textColor = rootStyle.getPropertyValue('--text').trim() || '#e8e6e3';
+    const accentColor = rootStyle.getPropertyValue('--accent').trim() || '#d4a843';
+    const textGradient = tc.createLinearGradient(textL, textCY, textR, textCY);
+    textGradient.addColorStop(0, textColor);
+    textGradient.addColorStop(0.72, accentColor);
+    textGradient.addColorStop(1, accentColor);
+    tc.fillStyle = textGradient;
+
+    const measured = tc.measureText('SONARA');
+    const scaleX = spanRect.width / measured.width;
+    tc.save();
+    tc.translate(textL, textCY);
+    tc.scale(scaleX, 1);
+    tc.textAlign = 'left';
+    tc.fillText('SONARA', 0, 0);
+    tc.restore();
+
+    tc.globalCompositeOperation = 'destination-in';
+    const mask = tc.createRadialGradient(maskX, lightY, 0, maskX, lightY, textW * 1.05);
+    mask.addColorStop(0, 'rgba(255,255,255,1)');
+    mask.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+    mask.addColorStop(0.58, 'rgba(255,255,255,0.4)');
+    mask.addColorStop(0.82, 'rgba(255,255,255,0.1)');
+    mask.addColorStop(1, 'rgba(255,255,255,0)');
+    tc.fillStyle = mask;
+    tc.fillRect(0, 0, w, h);
+    tc.globalCompositeOperation = 'source-over';
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+
+    gl.disable(gl.BLEND);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.useProgram(prog);
+    const originU = maskX / w;
+    const originV = lightY / h;
+    gl.uniform2f(uOrigin, originU, originV);
+    gl.uniform1f(uStrength, 0.16);
+    gl.uniform1f(uBreath, breath);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    if (!raysReady && breath > 0.01) {
+      raysReady = true;
+      canvas.style.opacity = '1';
+      particleCanvas.style.opacity = '1';
+    }
+
     const glowRadius = textW * 0.6;
     const glowHitsText = sweeping && breath > 0.01 && lightProgress < 0.8 &&
       lightX + glowRadius > textL && lightX - glowRadius < textR;
@@ -196,6 +319,7 @@
 
   window.addEventListener('resize', resize);
   document.fonts.ready.then(() => {
-    resize(); draw();
+    resize();
+    draw();
   });
 })();
