@@ -42,7 +42,7 @@ function initHeroCanvas() {
   if (!gl) return initHeroCanvas2D();
 
   let w, h;
-  const PARTICLE_COUNT = 500;
+  const PARTICLE_COUNT = 2000;
   const MAX_PARTICLES = 3500;
   const THROTTLE_START = 2800; // start culling congested particles above this
   let particles = [];
@@ -669,7 +669,7 @@ function initHeroCanvas2D() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  const PARTICLE_COUNT = 500;
+  const PARTICLE_COUNT = 2000;
   let particles = [];
   let time = 0;
   const heroVis = trackVisibility('hero');
