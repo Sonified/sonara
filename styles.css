@@ -832,9 +832,9 @@ a:hover { opacity: 0.7; }
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: rgba(160, 130, 210, 1);
-  background: rgba(160, 130, 210, 0.2);
-  border: 1px solid rgba(160, 130, 210, 0.4);
+  color: rgba(160, 130, 210, 0.9);
+  background: rgba(60, 45, 90, 0.6);
+  border: 1px solid rgba(120, 100, 170, 0.4);
   border-radius: 4px;
   padding: 0.25rem 0.6rem;
   cursor: pointer;
@@ -851,13 +851,13 @@ a:hover { opacity: 0.7; }
 
 @keyframes seqPlayPulse {
   0%, 100% {
-    border-color: rgba(160, 130, 210, 0.25);
-    background: rgba(160, 130, 210, 0.1);
+    border-color: rgba(120, 100, 170, 0.3);
+    background: rgba(60, 45, 90, 0.5);
     box-shadow: 0 0 6px rgba(139, 110, 192, 0), 0 0 20px rgba(139, 110, 192, 0);
   }
   50% {
-    border-color: rgba(160, 130, 210, 0.7);
-    background: rgba(160, 130, 210, 0.2);
+    border-color: rgba(120, 100, 170, 0.6);
+    background: rgba(60, 45, 90, 0.7);
     box-shadow: 0 0 8px rgba(139, 110, 192, 0.4), 0 0 24px rgba(139, 110, 192, 0.15);
   }
 }
@@ -865,14 +865,21 @@ a:hover { opacity: 0.7; }
 .seq-play:hover,
 .seq-loop:hover,
 .seq-randomize:hover {
-  background: rgba(160, 130, 210, 0.2);
-  border-color: rgba(160, 130, 210, 0.4);
+  background: rgba(60, 45, 90, 0.75);
+  border-color: rgba(120, 100, 170, 0.55);
+}
+
+.seq-loop {
+  color: rgba(160, 130, 210, 0.55);
+  background: rgba(60, 45, 90, 0.35);
+  border-color: rgba(120, 100, 170, 0.25);
 }
 
 .seq-loop.active {
-  color: rgba(160, 130, 210, 1);
-  background: rgba(160, 130, 210, 0.25);
-  border-color: rgba(160, 130, 210, 0.5);
+  color: rgba(160, 130, 210, 0.9);
+  background: rgba(60, 45, 90, 0.6);
+  border: 1px solid rgba(120, 100, 170, 0.4);
+  box-shadow: 0 0 6px rgba(139, 110, 192, 0.2);
 }
 .seq-toolbar { gap: 0.5rem; }
 

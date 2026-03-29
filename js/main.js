@@ -315,6 +315,20 @@ import { initVisuals } from './visuals.js?v=5';
   buildGrid(currentDisplayPattern);
   savePattern();
 
+  // Match synth & catalog visual heights to sequencer
+  function matchVisualHeights() {
+    const seqVis = document.querySelector('.sequencer-visual');
+    if (seqVis) {
+      const h = seqVis.offsetHeight;
+      document.querySelectorAll('.synth-visual, .catalog-visual').forEach(el => {
+        el.style.height = h + 'px';
+      });
+    }
+  }
+  // Run after layout settles, and on resize
+  setTimeout(matchVisualHeights, 100);
+  window.addEventListener('resize', matchVisualHeights);
+
   // Toolbar buttons
   const randomizeBtn = document.getElementById('seq-randomize');
   if (randomizeBtn) {

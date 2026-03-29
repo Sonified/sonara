@@ -63,9 +63,16 @@ async function prefetchPeriodicWaves() {
   const wtList = document.getElementById('wt-list');
   if (wtWrap && wtCurrent && wtList) {
     wtList.innerHTML = '';
+    // Sort THEMIS wavetables to the top of the list
+    const wtKeys = Object.keys(periodicWaveData)
+      .filter(n => !skipWavetables.includes(n))
+      .sort((a, b) => {
+        const aT = a.includes('THEMIS') ? 0 : 1;
+        const bT = b.includes('THEMIS') ? 0 : 1;
+        return aT - bT;
+      });
     let first = true;
-    for (const name of Object.keys(periodicWaveData)) {
-      if (skipWavetables.includes(name)) continue;
+    for (const name of wtKeys) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.dataset.value = name;
@@ -332,7 +339,14 @@ let seqKickBuf = null;
 let seqHatBuf = null;
 let seqLooping = false;
 
-export function setSeqLoop(val) { seqLooping = val; }
+export function setSeqLoop(val) {
+  // When turning off loop, reset step to current position within the bar
+  // so the sequence finishes the current pass instead of stopping immediately
+  if (!val && seqLooping && seqStep >= 16) {
+    seqStep = seqStep % 16;
+  }
+  seqLooping = val;
+}
 export function getSeqLoop() { return seqLooping; }
 
 function seqTriggerStep(pat) {
@@ -358,7 +372,7 @@ function seqTriggerStep(pat) {
     src.buffer = seqHatBuf;
     src.playbackRate.value = 1.5 + Math.random();
     const g = seqAc.createGain();
-    g.gain.value = 0.5;
+    g.gain.value = 0.35;
     src.connect(g);
     g.connect(seqMaster);
     src.start(t);
