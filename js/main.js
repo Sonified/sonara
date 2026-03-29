@@ -3,7 +3,7 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb } from './audio.js?v=8';
+import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser } from './audio.js?v=8';
 import { initVisuals } from './visuals.js?v=8';
 
 (function() {
@@ -343,6 +343,33 @@ import { initVisuals } from './visuals.js?v=8';
     });
   });
 
+  // ===== Hero "Listen to the solar wind" button RMS shimmer =====
+  const heroBtn = document.querySelector('.listen-btn');
+  if (heroBtn) {
+    const heroRmsData = new Uint8Array(128);
+    let smoothAlpha = 0;
+    (function heroShimmer() {
+      const analyser = getHeroAnalyser();
+      if (analyser && heroBtn.classList.contains('playing')) {
+        analyser.getByteTimeDomainData(heroRmsData);
+        let sum = 0;
+        for (let i = 0; i < heroRmsData.length; i++) {
+          const v = (heroRmsData[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / heroRmsData.length);
+        const intensity = Math.min(1, rms * 5);
+        const target = 0.03 + intensity * 0.35;
+        smoothAlpha += (target - smoothAlpha) * 0.15;
+        heroBtn.style.background = `rgba(212, 168, 67, ${smoothAlpha})`;
+      } else {
+        smoothAlpha = 0;
+        heroBtn.style.background = '';
+      }
+      requestAnimationFrame(heroShimmer);
+    })();
+  }
+
   // ===== Scroll Hint Fade =====
   // Only show/hide based on hero visibility AFTER the hint has been revealed by listen click
   const scrollHint = document.querySelector('.scroll-hint');
@@ -453,7 +480,7 @@ import { initVisuals } from './visuals.js?v=8';
             stopCueFadeParallax(section);
             section.querySelector('.section-down-cue')?.style.setProperty('--cue-scroll-y', '0px');
             section.classList.add('show-down-cue');
-          }, 2000);
+          }, 10000);
           cueTimers.set(section, timer);
         } else {
           if (cueTimers.has(section)) {
