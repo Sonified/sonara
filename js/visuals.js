@@ -18,13 +18,17 @@ document.addEventListener('mousemove', (e) => {
 
 // Shared visibility tracker — returns { visible, wasHidden } per section
 function trackVisibility(sectionId) {
-  const state = { visible: sectionId === 'hero', firstReveal: true };
+  const state = { visible: sectionId === 'hero', firstReveal: true, _intersecting: sectionId === 'hero' };
   const el = document.getElementById(sectionId);
   if (!el) return state;
   const obs = new IntersectionObserver(([entry]) => {
-    state.visible = entry.isIntersecting;
+    state._intersecting = entry.isIntersecting;
+    state.visible = state._intersecting && !document.hidden;
   }, { threshold: 0 });
   obs.observe(el);
+  document.addEventListener('visibilitychange', () => {
+    state.visible = state._intersecting && !document.hidden;
+  });
   return state;
 }
 

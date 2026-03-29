@@ -19,6 +19,8 @@
   let lastFrameTime = null;
   let raysReady = false;
   let spawnCarry = 0;
+  let visible = false;
+  let rafId = null;
 
   canvas.style.opacity = '0';
 
@@ -360,14 +362,35 @@
     tickParticles();
     drawParticles(textR, textW * 0.35);
 
-    requestAnimationFrame(draw);
+    rafId = requestAnimationFrame(draw);
   }
+
+  function startLoop() {
+    if (rafId) return;
+    lastFrameTime = null;
+    rafId = requestAnimationFrame(draw);
+  }
+
+  function stopLoop() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  }
+
+  const observer = new IntersectionObserver(([entry]) => {
+    visible = entry.isIntersecting;
+    if (visible && !document.hidden) startLoop(); else stopLoop();
+  }, { threshold: 0 });
+  observer.observe(canvas);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopLoop();
+    else if (visible) startLoop();
+  });
 
   window.addEventListener('resize', resize);
   window.addEventListener('beforeunload', hideRaysImmediately);
   window.addEventListener('pagehide', hideRaysImmediately);
   document.fonts.ready.then(() => {
     resize();
-    draw();
+    startLoop();
   });
 })();
