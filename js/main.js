@@ -3,11 +3,16 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern } from './audio.js?v=5';
+import { play, stop, killNow, seqRestart, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop } from './audio.js?v=5';
 import { initVisuals } from './visuals.js?v=5';
 
 (function() {
   'use strict';
+
+  // Enable smooth scrolling after initial load so reload doesn't animate to restored position
+  requestAnimationFrame(() => {
+    document.documentElement.style.scrollBehavior = 'smooth';
+  });
 
   // ===== Cursor Glow =====
   const cursorGlow = document.getElementById('cursor-glow');
@@ -153,11 +158,6 @@ import { initVisuals } from './visuals.js?v=5';
       btn.classList.remove('playing', 'fading');
       fadingButtons.delete(btn);
       if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
-      if (soundId === 'stem-music') {
-        currentDisplayPattern = generateStemPattern();
-        setStemPattern(currentDisplayPattern);
-        buildGrid(currentDisplayPattern);
-      }
     };
     if (p && typeof p.then === 'function') p.then(cleanup);
     else setTimeout(cleanup, 2000);
@@ -169,12 +169,6 @@ import { initVisuals } from './visuals.js?v=5';
     autoEndTimers.delete(btn);
     if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
     stop(soundId);
-    // Generate fresh pattern for next play
-    if (soundId === 'stem-music') {
-      currentDisplayPattern = generateStemPattern();
-      setStemPattern(currentDisplayPattern);
-      buildGrid(currentDisplayPattern);
-    }
   }
 
   // Poll audio clock via rAF for frame-accurate end detection
@@ -250,7 +244,7 @@ import { initVisuals } from './visuals.js?v=5';
     // Melody rows (always 5, high pitch to low)
     const melodyRows = pattern.melodyRows || [];
     melodyRows.forEach((rowData, r) => {
-      addRow(r === 0 ? 'SYN' : '', rowData, 'syn');
+      addRow(r === 2 ? 'SYN' : '', rowData, 'syn');
     });
 
     // Hat + Kick
@@ -273,6 +267,15 @@ import { initVisuals } from './visuals.js?v=5';
     for (let i = 0; i < 16; i++) {
       const cell = document.createElement('div');
       cell.className = 'seq-cell' + (data[i] ? ' active' : '');
+      const col = i;
+      cell.addEventListener('click', () => {
+        data[col] = data[col] ? 0 : 1;
+        cell.classList.toggle('active');
+        // Update melodyFreqs when toggling synth cells
+        if (type === 'syn') updateMelodyFreqs();
+        setStemPattern(currentDisplayPattern);
+        savePattern();
+      });
       wrapper.appendChild(cell);
       cells.push(cell);
     }
@@ -280,23 +283,83 @@ import { initVisuals } from './visuals.js?v=5';
     seqCells.push({ cells });
   }
 
-  // Generate initial pattern on load — this is what gets played first time
-  let currentDisplayPattern = generateStemPattern();
-  setStemPattern(currentDisplayPattern); // queue it for first play
+  function updateMelodyFreqs() {
+    if (!currentDisplayPattern) return;
+    const { melodyRows, pitches, melodyFreqs } = currentDisplayPattern;
+    for (let step = 0; step < 16; step++) {
+      melodyFreqs[step] = [];
+      for (let r = 0; r < melodyRows.length; r++) {
+        if (melodyRows[r][step]) melodyFreqs[step].push(pitches[r]);
+      }
+    }
+  }
+
+  // Persist pattern across refreshes
+  function savePattern() {
+    try {
+      const { kick, hat, melodyRows, melodyFreqs, pitches, waveType, bpm, step, steps } = currentDisplayPattern;
+      localStorage.setItem('sonara-seq-pattern', JSON.stringify({ kick, hat, melodyRows, melodyFreqs, pitches, waveType, bpm, step, steps }));
+    } catch(e) {}
+  }
+  function loadPattern() {
+    try {
+      const saved = localStorage.getItem('sonara-seq-pattern');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return null;
+  }
+
+  // Restore saved pattern or generate fresh on first visit
+  let currentDisplayPattern = loadPattern() || generateStemPattern();
+  setStemPattern(currentDisplayPattern);
   buildGrid(currentDisplayPattern);
+  savePattern();
+
+  // Toolbar buttons
+  const randomizeBtn = document.getElementById('seq-randomize');
+  if (randomizeBtn) {
+    randomizeBtn.addEventListener('click', () => {
+      currentDisplayPattern = generateStemPattern();
+      setStemPattern(currentDisplayPattern);
+      buildGrid(currentDisplayPattern);
+      savePattern();
+    });
+  }
+
+  const seqPlayBtn = document.getElementById('seq-play');
+  if (seqPlayBtn) {
+    seqPlayBtn.addEventListener('click', () => {
+      seqPlayBtn.classList.add('clicked');
+      setStemPattern(currentDisplayPattern);
+      play('stem-music');
+      lastPlayheadCol = -1;
+    });
+  }
+
+  const seqLoopBtn = document.getElementById('seq-loop');
+  if (seqLoopBtn) {
+    seqLoopBtn.addEventListener('click', () => {
+      const newVal = !getSeqLoop();
+      setSeqLoop(newVal);
+      seqLoopBtn.classList.toggle('active', newVal);
+    });
+  }
 
   function animateSequencer() {
     const pattern = getStemPattern();
     if (pattern && seqCells.length) {
       const elapsed = audioNow() - pattern.startTime;
-      const col = Math.floor(elapsed / pattern.step);
+      let col = Math.floor(elapsed / pattern.step);
+      if (getSeqLoop()) col = ((col % 16) + 16) % 16;
 
-      if (col !== lastPlayheadCol && col >= 0 && col < 16) {
+
+
+      if (col !== lastPlayheadCol) {
         lastPlayheadCol = col;
         seqCells.forEach(row => {
           row.cells.forEach((cell, i) => {
-            cell.classList.toggle('playhead', i === col);
-            cell.classList.toggle('lit', i === col && cell.classList.contains('active'));
+            cell.classList.toggle('playhead', i === col && col >= 0 && col < 16);
+            cell.classList.toggle('lit', i === col && col >= 0 && col < 16 && cell.classList.contains('active'));
           });
         });
       }

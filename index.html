@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
   <title>SONARA | Sounds of NASA: Research Activated</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
   <link rel="stylesheet" href="styles.css">
@@ -43,7 +44,7 @@
     <div class="vision-content">
       <div class="vision-center">
         <div class="section-label">The Vision</div>
-        <h2 class="vision-headline">What if the universe<br>already had a soundtrack?</h2>
+        <h2 class="vision-headline">What if science<br>had a soundtrack?</h2>
         <p class="vision-body">NASA satellites record the electromagnetic signatures of the sun, solar wind, and Earth's magnetosphere every second. SONARA transforms that data into sound, unlocking three powerful pathways: citizen science, creative collaboration, and immersive education.</p>
       </div>
       <div class="curiosity-cascade">
@@ -54,7 +55,7 @@
         <div class="cascade-arrow">→</div>
         <div class="cascade-step" data-step="2">
           <div class="cascade-icon">🤔</div>
-          <p>"Wait, what <em>is</em> a coronal mass ejection?"</p>
+          <p>"Wait, this sounds amazing! What <em>is</em> a coronal mass ejection?"</p>
         </div>
         <div class="cascade-arrow">→</div>
         <div class="cascade-step" data-step="3">
@@ -67,22 +68,18 @@
   </section>
 
   <!-- ===== GOAL 1: EDUCATION & COMMUNICATION ===== -->
-  <section id="planetarium" class="section">
-    <canvas id="dome-canvas"></canvas>
-    <div class="planet-content">
-      <div class="planet-split">
-        <div class="planet-left">
-          <div class="section-label">Goal 1</div>
-          <h2 class="planet-title">Education & Communication</h2>
-          <p class="planet-body">Immersive audification-infused experiences inside planetarium domes and classrooms. Multi-channel spatial audio powered by OpenSpace software, where audiences don't just see the cosmos. They hear it.</p>
-        </div>
-        <div class="planet-right">
-          <div class="planet-hero-image">
-            <img src="images/EYU_2025_Alexander_HEARTS_3.jpeg" alt="SONARA team presenting audified heliophysics data to students at CU Boulder" loading="lazy">
-          </div>
-        </div>
+  <section id="education" class="section">
+    <canvas id="edu-canvas"></canvas>
+    <div class="edu-content">
+      <div class="edu-center">
+        <div class="section-label">Goal 1</div>
+        <h2 class="edu-title">Education & Communication</h2>
+        <p class="edu-body">Immersive audification-infused experiences inside planetarium domes and classrooms. Multi-channel spatial audio powered by OpenSpace software, where audiences don't just see the cosmos. They hear it.</p>
       </div>
-      <div class="partners-grid" style="margin-top: 3rem; display: flex; flex-wrap: wrap; justify-content: center; gap: 0.8rem;">
+      <div class="edu-hero-image">
+        <img src="images/EYU_2025_Alexander_HEARTS_3.jpeg" alt="SONARA team presenting audified heliophysics data to students at CU Boulder" loading="lazy">
+      </div>
+      <div class="partners-grid" style="margin-top: 2rem; display: flex; flex-wrap: wrap; justify-content: center; gap: 0.8rem;">
         <div class="partner-logo"><span>CU Boulder</span></div>
         <div class="partner-logo"><span>Virginia Tech</span></div>
         <div class="partner-logo"><span>Michigan State</span></div>
@@ -111,24 +108,10 @@
         </button>
       </div>
       <div class="cs-right">
-        <div class="cs-stats-block">
-          <div class="cs-stat">
-            <span class="cs-stat-number" data-count="1900">0</span>
-            <span class="cs-stat-plus">+</span>
-            <span class="cs-stat-label">Citizen science volunteers</span>
-          </div>
-          <div class="cs-stat">
-            <span class="cs-stat-number" data-count="18000">0</span>
-            <span class="cs-stat-plus">+</span>
-            <span class="cs-stat-label">Feature identifications</span>
-          </div>
-          <div class="cs-stat-paper">
-            <a href="https://www.frontiersin.org/journals/astronomy-and-space-sciences/articles/10.3389/fspas.2026.1700061/full" target="_blank" style="text-decoration: none; color: inherit;">
-              <span class="cs-paper-title">"Inverted radial Alfven continua"</span>
-              <span class="cs-paper-journal">Published in Frontiers in Astronomy &amp; Space Sciences, 2026 ↗</span>
-            </a>
-          </div>
-        </div>
+        <a href="https://spaceweather.now.audio/" target="_blank">
+          <img src="images/spaceweather-now-audio.jpg" alt="Space Weather Now Audio" loading="lazy">
+          <span class="cs-image-caption">spaceweather.now.audio</span>
+        </a>
       </div>
     </div>
   </section>
@@ -143,6 +126,11 @@
         <h2 class="music-title">STEM + Music</h2>
         <p class="music-subtitle">Building creative instruments from NASA data</p>
       </div>
+      <div class="seq-toolbar">
+        <button class="seq-play" id="seq-play">&#9654; Play</button>
+        <button class="seq-loop" id="seq-loop">&#8635; Loop</button>
+        <button class="seq-randomize" id="seq-randomize">Randomize</button>
+      </div>
       <div class="instruments-grid">
         <div class="instrument-card">
           <div class="instrument-visual sequencer-visual">
@@ -153,6 +141,13 @@
         </div>
         <div class="instrument-card">
           <div class="instrument-visual synth-visual">
+            <div class="synth-wt-label">
+              <span class="wt-prefix">Wavetable:</span>
+              <div class="wt-select" id="wt-select">
+                <button class="wt-current" id="wt-current" type="button">—</button>
+                <div class="wt-list" id="wt-list"></div>
+              </div>
+            </div>
             <canvas id="synth-wave-canvas"></canvas>
           </div>
           <h3>SONARA Synth</h3>
@@ -180,15 +175,11 @@
           <span class="evidence-number">113</span>
           <span class="evidence-label">countries reached</span>
         </div>
-        <div class="evidence-stat">
+        <!-- <div class="evidence-stat">
           <span class="evidence-number">4+</span>
           <span class="evidence-label">university workshops</span>
-        </div>
+        </div> -->
       </div>
-      <button class="sound-trigger music-listen" aria-label="Play a space instrument">
-        <span class="sound-icon"></span>
-        <span>Play a space instrument</span>
-      </button>
     </div>
   </section>
 

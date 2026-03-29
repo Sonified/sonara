@@ -9,27 +9,172 @@ let stemAnalyser = null;
 let heroAnalyser = null;
 const bufferCache = {};
 
+// Two-phase loading: fetch raw bytes immediately (no AudioContext needed),
+// decode to AudioBuffer on demand when AudioContext exists.
+const rawCache = {};  // url → ArrayBuffer (fetched on page load)
+
+async function prefetchBuffer(url) {
+  if (rawCache[url]) return;
+  const name = url.split('/').pop();
+  console.log(`[audio] fetching: ${name}`);
+  const resp = await fetch(url);
+  rawCache[url] = await resp.arrayBuffer();
+  console.log(`[audio] fetched:  ${name}`);
+}
+
 async function loadBuffer(url) {
   if (bufferCache[url]) return bufferCache[url];
+  const name = url.split('/').pop();
+  // Fetch if not already prefetched
+  if (!rawCache[url]) {
+    console.log(`[audio] fetching: ${name}`);
+    const resp = await fetch(url);
+    rawCache[url] = await resp.arrayBuffer();
+  }
+  console.log(`[audio] decoding: ${name}`);
   const ac = getContext();
-  const resp = await fetch(url);
-  const arrayBuf = await resp.arrayBuffer();
-  const audioBuf = await ac.decodeAudioData(arrayBuf);
+  const audioBuf = await ac.decodeAudioData(rawCache[url]);
   bufferCache[url] = audioBuf;
+  console.log(`[audio] ready:    ${name} (${audioBuf.duration.toFixed(1)}s)`);
   return audioBuf;
 }
 
-// Preload audio files on first user interaction
+// Wavetable PeriodicWaves — pre-computed harmonic data loaded from JSON
+const periodicWaveCache = {};
+let periodicWaveData = null;  // raw JSON, fetched eagerly
+
+// Wavetables to skip (inaudible as PeriodicWave oscillators)
+const skipWavetables = [
+  'WT_MMS_MAG_Dawn_Chorus_1',
+  'WT_MMS_MAG_Dawn_Chorus_2',
+  'WT_MMS_MAG_Dawn_Chorus_3',
+];
+
+async function prefetchPeriodicWaves() {
+  console.log('[audio] fetching: periodic_waves.json');
+  const resp = await fetch('audio/wavetables/periodic_waves.json');
+  periodicWaveData = await resp.json();
+  const total = Object.keys(periodicWaveData).length;
+  const active = total - skipWavetables.length;
+  console.log(`[audio] fetched:  periodic_waves.json (${active} active, ${skipWavetables.length} skipped)`);
+  // Populate the wavetable dropdown
+  const wtWrap = document.getElementById('wt-select');
+  const wtCurrent = document.getElementById('wt-current');
+  const wtList = document.getElementById('wt-list');
+  if (wtWrap && wtCurrent && wtList) {
+    wtList.innerHTML = '';
+    let first = true;
+    for (const name of Object.keys(periodicWaveData)) {
+      if (skipWavetables.includes(name)) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.value = name;
+      btn.textContent = name.replace('WT_', '');
+      if (first) { btn.classList.add('active'); }
+      btn.addEventListener('click', () => {
+        wtList.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        wtCurrent.textContent = name.replace('WT_', '');
+        wtWrap.dataset.value = name;
+        wtWrap.classList.remove('open');
+        try { localStorage.setItem('sonara-wavetable', name); } catch(e) {}
+      });
+      wtList.appendChild(btn);
+      if (first) {
+        wtCurrent.textContent = name.replace('WT_', '');
+        wtWrap.dataset.value = name;
+        first = false;
+      }
+    }
+    // Restore saved wavetable
+    try {
+      const saved = localStorage.getItem('sonara-wavetable');
+      if (saved) {
+        const btn = wtList.querySelector(`button[data-value="${saved}"]`);
+        if (btn) {
+          wtList.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          wtCurrent.textContent = saved.replace('WT_', '');
+          wtWrap.dataset.value = saved;
+        }
+      }
+    } catch(e) {}
+
+    wtCurrent.addEventListener('click', (e) => {
+      e.stopPropagation();
+      wtWrap.classList.toggle('open');
+    });
+    document.addEventListener('click', () => wtWrap.classList.remove('open'));
+    wtList.addEventListener('click', (e) => e.stopPropagation());
+  }
+}
+
+function buildPeriodicWaves() {
+  if (Object.keys(periodicWaveCache).length > 0 || !periodicWaveData) return;
+  const ac = getContext();
+  for (const [name, { real, imag }] of Object.entries(periodicWaveData)) {
+    if (skipWavetables.includes(name)) continue;
+    periodicWaveCache[name] = ac.createPeriodicWave(
+      new Float32Array(real), new Float32Array(imag),
+      { disableNormalization: false }
+    );
+  }
+  const keys = Object.keys(periodicWaveCache);
+  console.log(`[audio] built ${keys.length} PeriodicWaves`);
+  keys.forEach(k => console.log(`[audio]   ✓ ${k.replace('WT_', '')}`));
+}
+
+function getSelectedWavetable() {
+  buildPeriodicWaves();
+  const wtWrap = document.getElementById('wt-select');
+  const val = wtWrap?.dataset?.value;
+  if (val && periodicWaveCache[val]) {
+    return periodicWaveCache[val];
+  }
+  const keys = Object.keys(periodicWaveCache);
+  return keys.length > 0 ? periodicWaveCache[keys[0]] : null;
+}
+
+// Audio resources grouped by section (fetch-only, no AudioContext)
+const sectionAudio = {
+  'hero':            () => { prefetchBuffer('audio/mp3/Solar_Hum_Loop_More_Filtered_Short.mp3'); },
+  'citizen-science': () => { prefetchBuffer('audio/mp3/THE_20120302_Cleaned_MAX.mp3'); },
+  'stem-music':      () => {
+    prefetchBuffer('audio/mp3/Kick_Processed_Final__WIND_BGSE_z_2007_08_13_LFEvent_CLEANED_ISOLATED_SHORT.mp3');
+    prefetchBuffer('audio/mp3/Solar_Shaker_1.mp3');
+    prefetchPeriodicWaves();
+  },
+};
+const sectionOrder = ['hero', 'citizen-science', 'stem-music'];
+
+// Prefetch: runs immediately on page load — fetches raw bytes, no AudioContext
+(function prefetchAll() {
+  const visible = new Set();
+  document.querySelectorAll('.section').forEach(s => {
+    const rect = s.getBoundingClientRect();
+    if (rect.top < window.innerHeight && rect.bottom > 0) {
+      const sound = s.dataset.sound || s.id;
+      visible.add(sound);
+    }
+  });
+
+  console.log(`[audio] visible sections: ${[...visible].join(', ') || 'none detected yet'}`);
+
+  const loaded = new Set();
+  for (const id of visible) {
+    if (sectionAudio[id]) { sectionAudio[id](); loaded.add(id); }
+  }
+  for (const id of sectionOrder) {
+    if (!loaded.has(id)) sectionAudio[id]();
+  }
+})();
+
+// preload() now just builds PeriodicWaves (needs AudioContext from user gesture)
 let preloaded = false;
 function preload() {
   if (preloaded) return;
   preloaded = true;
-  loadBuffer('audio/mp3/THE_20120302_Cleaned_MAX.mp3');
-  loadBuffer('audio/mp3/Proton_Beam_Raw_WI_H2_MFI_181819_000_002.mp3');
-  loadBuffer('audio/mp3/Solar_Hum_Loop_More_Filtered_Short.mp3');
-  loadBuffer('audio/mp3/TRIMMED_SHORTER_MMS1_SCM_BRST_L2_Dawn_Chorus.mp3');
-  loadBuffer('audio/mp3/Kick_Processed_Final__WIND_BGSE_z_2007_08_13_LFEvent_CLEANED_ISOLATED_SHORT.mp3');
-  loadBuffer('audio/mp3/Solar_Shaker_1.mp3');
+  buildPeriodicWaves();
 }
 
 function getContext() {
@@ -76,8 +221,8 @@ function makeReverb(ac, duration, decay) {
 
 // ===== HERO: Solar wind — alternates between two audified sources =====
 const heroFiles = [
-  'audio/mp3/Proton_Beam_Raw_WI_H2_MFI_181819_000_002.mp3',
   'audio/mp3/Solar_Hum_Loop_More_Filtered_Short.mp3',
+  // 'audio/mp3/Proton_Beam_Raw_WI_H2_MFI_181819_000_002.mp3',
   // 'audio/mp3/TRIMMED_SHORTER_MMS1_SCM_BRST_L2_Dawn_Chorus.mp3',
 ];
 // Shuffle once on load — Fisher-Yates
@@ -110,28 +255,23 @@ async function heroSound(ac, master) {
 }
 
 // ===== CITIZEN SCIENCE: Audified THEMIS data =====
-function citizenScienceSound(ac, master) {
+async function citizenScienceSound(ac, master) {
   const nodes = [];
   const gains = [];
+  const buf = await loadBuffer('audio/mp3/THE_20120302_Cleaned_MAX.mp3');
   const now = ac.currentTime;
-  const buf = bufferCache['audio/mp3/THE_20120302_Cleaned_MAX.mp3'];
 
-  if (buf) {
-    const src = ac.createBufferSource();
-    src.buffer = buf;
-    const g = ac.createGain();
-    g.gain.value = 0;
-    g.gain.linearRampToValueAtTime(0.75, now + 0.5);
-    src.connect(g);
-    g.connect(master);
-    src.start();
-    nodes.push(src);
-    gains.push(g);
-    return { nodes, gains, duration: buf.duration };
-  }
-
-  // Fallback if not yet loaded — play silence briefly, then retry will work
-  return { nodes, gains, duration: 0.1 };
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const g = ac.createGain();
+  g.gain.value = 0;
+  g.gain.linearRampToValueAtTime(0.375, now + 0.5);
+  src.connect(g);
+  g.connect(master);
+  src.start();
+  nodes.push(src);
+  gains.push(g);
+  return { nodes, gains, duration: buf.duration };
 }
 
 // ===== STEM-MUSIC: Pattern generation + playback =====
@@ -154,116 +294,171 @@ export function generateStemPattern() {
     hat[i] = Math.random() < (offBeat ? 0.5 : 0.15) ? 1 : 0;
   }
 
-  // Melody
+  // Melody — single octave, 5 notes = 5 rows (one pitch per row)
   const scales = [
-    [261.63, 293.66, 329.63, 392, 440],
-    [293.66, 329.63, 392, 440, 523.25],
-    [349.23, 392, 440, 523.25, 587.33],
+    [261.63, 293.66, 329.63, 392, 440],       // C4 D4 E4 G4 A4
+    [293.66, 329.63, 392, 440, 523.25],       // D4 E4 G4 A4 C5
+    [349.23, 392, 440, 523.25, 587.33],       // F4 G4 A4 C5 D5
   ];
   const scale = scales[Math.floor(Math.random() * scales.length)];
-  // 10 pitches (5 base + 5 octave-up) sorted high→low, paired into 5 rows
-  const allPitches = [...scale, ...scale.map(f => f * 2)].sort((a, b) => b - a); // 10 pitches
-  const melodyRows = [0,1,2,3,4].map(() => new Array(16).fill(0)); // 5 rows
-  const melodyFreqs = new Array(16).fill(0);
+  const pitches = [...scale].sort((a, b) => b - a); // high→low, 5 pitches = 5 rows
+  const melodyRows = pitches.map(() => new Array(16).fill(0));
+  const melodyFreqs = Array.from({ length: 16 }, () => []);
 
   const noteCount = 6 + Math.floor(Math.random() * 3);
   const waveTypes = ['sawtooth', 'triangle', 'square'];
   const waveType = waveTypes[Math.floor(Math.random() * waveTypes.length)];
 
-  for (let i = 0; i < noteCount; i++) {
-    const stepIdx = i * 2;
-    if (stepIdx >= 16) break;
-    const baseFreq = scale[Math.floor(Math.random() * scale.length)];
-    const freq = Math.random() < 0.3 ? baseFreq * 2 : baseFreq;
-    const pitchIdx = allPitches.indexOf(freq);
-    // 10 pitches → 5 rows: pitches 0,1 → row 0 (highest), 2,3 → row 1, etc.
-    const rowIdx = Math.floor(pitchIdx / 2);
-    if (rowIdx >= 0 && rowIdx < 5) melodyRows[rowIdx][stepIdx] = 1;
-    melodyFreqs[stepIdx] = freq;
+  for (let n = 0; n < noteCount; n++) {
+    const stepIdx = Math.floor(Math.random() * 16);
+    const rowIdx = Math.floor(Math.random() * 5);
+    melodyRows[rowIdx][stepIdx] = 1;
+    if (!melodyFreqs[stepIdx].includes(pitches[rowIdx])) {
+      melodyFreqs[stepIdx].push(pitches[rowIdx]);
+    }
   }
 
-  return { kick, hat, melodyRows, melodyFreqs, pitches: allPitches, waveType, bpm, step, steps: 16 };
+  return { kick, hat, melodyRows, melodyFreqs, pitches, waveType, bpm, step, steps: 16 };
+}
+
+// Live step sequencer — one central clock, triggers notes per step
+let seqInterval = null;
+let seqStep = 0;
+let seqAc = null;
+let seqMaster = null;
+let seqSynthBus = null;
+let seqRevG = null;
+let seqKickBuf = null;
+let seqHatBuf = null;
+let seqLooping = false;
+
+export function setSeqLoop(val) { seqLooping = val; }
+export function getSeqLoop() { return seqLooping; }
+
+function seqTriggerStep(pat) {
+  const col = seqStep % 16;
+  const t = seqAc.currentTime;
+  const step = pat.step;
+  const wt = getSelectedWavetable();
+
+  // Kick
+  if (pat.kick[col] && seqKickBuf) {
+    const src = seqAc.createBufferSource();
+    src.buffer = seqKickBuf;
+    const g = seqAc.createGain();
+    g.gain.value = 0.8;
+    src.connect(g);
+    g.connect(seqMaster);
+    src.start(t);
+  }
+
+  // Hat
+  if (pat.hat[col] && seqHatBuf) {
+    const src = seqAc.createBufferSource();
+    src.buffer = seqHatBuf;
+    src.playbackRate.value = 1.5 + Math.random();
+    const g = seqAc.createGain();
+    g.gain.value = 0.5;
+    src.connect(g);
+    g.connect(seqMaster);
+    src.start(t);
+  }
+
+  // Melody
+  const freqs = pat.melodyFreqs[col];
+  if (freqs && freqs.length) {
+    const voiceGain = 0.04 / Math.max(freqs.length, 1);
+    freqs.forEach(freq => {
+      const osc = seqAc.createOscillator();
+      if (wt) osc.setPeriodicWave(wt);
+      else osc.type = pat.waveType;
+      osc.frequency.value = freq;
+      osc.detune.value = (Math.random() - 0.5) * 10;
+      const lp = seqAc.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 1500 + Math.random() * 1500;
+      lp.Q.value = 2 + Math.random() * 3;
+      const g = seqAc.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(voiceGain + Math.random() * 0.02, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, t + step * 1.5 + Math.random() * step);
+      osc.connect(lp);
+      lp.connect(g);
+      g.connect(seqSynthBus);
+      osc.start(t);
+      osc.stop(t + step * 2);
+    });
+  }
+
+  seqStep++;
 }
 
 async function stemMusicSound(ac, master, prePattern) {
   const pat = prePattern || generateStemPattern();
-  const nodes = [];
-  const gains = [];
-  const step = pat.step;
 
-  // Reverb
-  const conv = ac.createConvolver();
-  conv.buffer = makeReverb(ac, 2, 2);
-  const revG = ac.createGain();
-  revG.gain.value = 0.3;
-  conv.connect(revG);
-  revG.connect(master);
+  // Set up persistent audio graph (reused across restarts)
+  seqAc = ac;
+  seqMaster = master;
 
-  // Kicks (space kick sample)
-  const kickBuf = await loadBuffer('audio/mp3/Kick_Processed_Final__WIND_BGSE_z_2007_08_13_LFEvent_CLEANED_ISOLATED_SHORT.mp3');
-  const now = ac.currentTime;
-  pat.kick.forEach((hit, i) => {
-    if (!hit) return;
-    const t = now + i * step + 0.2;
-    const src = ac.createBufferSource();
-    src.buffer = kickBuf;
-    const g = ac.createGain();
-    g.gain.setValueAtTime(0.8, t);
-    src.connect(g);
-    g.connect(master);
-    src.start(t);
-    nodes.push(src);
-  });
+  if (!seqRevG) {
+    const conv = ac.createConvolver();
+    conv.buffer = makeReverb(ac, 2, 2);
+    seqRevG = ac.createGain();
+    seqRevG.gain.value = 0.3;
+    conv.connect(seqRevG);
+    seqRevG.connect(master);
+    seqSynthBus = ac.createGain();
+    seqSynthBus.gain.value = 1;
+    seqSynthBus.connect(conv);
+    seqSynthBus.connect(master);
+  }
 
-  // Hats (solar shaker sample)
-  const hatBuf = await loadBuffer('audio/mp3/Solar_Shaker_1.mp3');
-  pat.hat.forEach((hit, i) => {
-    if (!hit) return;
-    const t = now + i * step + 0.2;
-    const src = ac.createBufferSource();
-    src.buffer = hatBuf;
-    src.playbackRate.value = 1.5 + Math.random();
-    const g = ac.createGain();
-    g.gain.setValueAtTime(0.5, t);
-    src.connect(g);
-    g.connect(master);
-    src.start(t);
-    nodes.push(src);
-  });
+  // Load samples
+  seqKickBuf = await loadBuffer('audio/mp3/Kick_Processed_Final__WIND_BGSE_z_2007_08_13_LFEvent_CLEANED_ISOLATED_SHORT.mp3');
+  seqHatBuf = await loadBuffer('audio/mp3/Solar_Shaker_1.mp3');
 
-  // Melody
-  pat.melodyFreqs.forEach((freq, i) => {
-    if (!freq) return;
-    const t = now + i * step + 0.2 + (Math.random() - 0.5) * step * 0.3;
-    const osc = ac.createOscillator();
-    osc.type = pat.waveType;
-    osc.frequency.value = freq;
-    osc.detune.value = (Math.random() - 0.5) * 10;
-    const lp = ac.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 1500 + Math.random() * 1500;
-    lp.Q.value = 2 + Math.random() * 3;
-    const g = ac.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.04 + Math.random() * 0.03, t + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.001, t + step * 1.5 + Math.random() * step);
-    osc.connect(lp);
-    lp.connect(g);
-    g.connect(conv);
-    g.connect(master);
-    osc.start(t);
-    osc.stop(t + step * 2);
-    nodes.push(osc);
-  });
+  // Reset step counter
+  seqStep = 0;
 
-  gains.push(revG);
-  const duration = 16 * step + 0.2;
-  const pattern = { ...pat, startTime: now + 0.2 };
-  return { nodes, gains, duration, pattern };
+  // Clear previous interval
+  if (seqInterval) clearInterval(seqInterval);
+
+  // Start stepping
+  const stepMs = pat.step * 1000;
+  seqTriggerStep(pat); // trigger step 0 immediately
+  seqInterval = setInterval(() => {
+    // Stop after 16 steps when not looping
+    if (seqStep >= 16 && !seqLooping) {
+      clearInterval(seqInterval);
+      seqInterval = null;
+      // Clear state immediately so next play() creates fresh graph
+      const entry = activeNodes['stem-music'];
+      delete activeNodes['stem-music'];
+      stemAnalyser = null;
+      seqRevG = null;
+      seqSynthBus = null;
+      // Delay master disconnect so last notes ring out
+      if (entry) {
+        setTimeout(() => {
+          try { entry.master.disconnect(); } catch(e) {}
+        }, 1500);
+      }
+      return;
+    }
+    const current = pendingStemPattern || pat;
+    seqTriggerStep(current);
+  }, stepMs);
+
+  const pattern = { ...pat, startTime: ac.currentTime };
+  return { nodes: [], gains: [seqRevG], duration: 16 * pat.step, pattern, synthBus: seqSynthBus };
 }
 
-// ===== PLANETARIUM: Immersive dome atmosphere =====
-function planetariumSound(ac, master) {
+export function seqRestart() {
+  seqStep = 0;
+}
+
+// ===== EDUCATION: Immersive dome atmosphere =====
+function educationSound(ac, master) {
   const nodes = [];
   const gains = [];
   const now = ac.currentTime;
@@ -351,7 +546,7 @@ const generators = {
   'hero': heroSound,
   'citizen-science': citizenScienceSound,
   'stem-music': stemMusicSound,
-  'planetarium': planetariumSound
+  'education': educationSound
 };
 
 let pendingStemPattern = null;
@@ -361,6 +556,7 @@ export function setStemPattern(pat) {
 }
 
 export async function play(id) {
+  if (id === 'stem-music' && activeNodes[id]) { seqRestart(); activeNodes[id].pattern.startTime = getContext().currentTime; return true; }
   if (activeNodes[id]) return false; // already playing
 
   const ac = getContext();
@@ -378,11 +574,11 @@ export async function play(id) {
   if (result.duration) {
     result.endTime = ac.currentTime + result.duration;
   }
-  // Attach analyser for stem-music oscilloscope
+  // Attach analyser for stem-music oscilloscope — only the synth melody feeds it
   if (id === 'stem-music') {
     stemAnalyser = ac.createAnalyser();
     stemAnalyser.fftSize = 2048;
-    master.connect(stemAnalyser);
+    (result.synthBus || master).connect(stemAnalyser);
   }
   // Attach analyser for hero audio reactivity
   if (id === 'hero') {
@@ -401,7 +597,12 @@ export function stop(id) {
 
   const { nodes, gains = [], master } = entry;
   delete activeNodes[id];
-  if (id === 'stem-music') stemAnalyser = null;
+  if (id === 'stem-music') {
+    stemAnalyser = null;
+    seqRevG = null;
+    seqSynthBus = null;
+    if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
+  }
   if (id === 'hero') heroAnalyser = null;
 
   try {
@@ -432,6 +633,22 @@ export function stop(id) {
       resolve();
     }, 800); // ~3 time constants at 0.25s = 0.75s, round up
   });
+}
+
+export function killNow(id) {
+  const entry = activeNodes[id];
+  if (!entry) return;
+  const { nodes, master } = entry;
+  delete activeNodes[id];
+  if (id === 'stem-music') {
+    stemAnalyser = null;
+    seqRevG = null;
+    seqSynthBus = null;
+    if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
+  }
+  if (id === 'hero') heroAnalyser = null;
+  nodes.forEach(n => { try { n.stop(); } catch(e) {} });
+  try { master.disconnect(); } catch(e) {}
 }
 
 export function getEndTime(id) {

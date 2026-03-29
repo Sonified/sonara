@@ -33,11 +33,19 @@ function initHeroCanvas() {
   if (!gl) return initHeroCanvas2D();
 
   let w, h;
-  const PARTICLE_COUNT = 240;
-  const MAX_PARTICLES = 5000;
+  const PARTICLE_COUNT = 500;
+  const MAX_PARTICLES = 2500;
+  const THROTTLE_START = 2000; // start culling congested particles above this
   let particles = [];
   let time = 0;
+  let lineIntensity = 0; // slow-smoothed audio for connection brightness
   const heroVis = trackVisibility('hero');
+
+  // Debug particle counter (localhost only, hero only)
+  const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  const counterEl = document.createElement('div');
+  counterEl.style.cssText = `position:absolute;top:12px;right:12px;z-index:10;color:rgba(255,255,255,0.6);font:12px/1 monospace;pointer-events:none;display:${isLocal ? 'block' : 'none'}`;
+  canvas.parentElement.appendChild(counterEl);
   let heroAudioPlaying = false;
   let audioIntensity = 0;
   const heroRmsData = new Uint8Array(128);
@@ -49,7 +57,8 @@ function initHeroCanvas() {
     if (!listenBtn) return;
     const ring = document.createElement('span');
     ring.className = 'listen-ring';
-    ring.style.animation = 'ripple 1.6s ease-out forwards';
+    const dur = 4 + Math.random() * 3; // 4–7s, variable
+    ring.style.animation = `ripple ${dur}s ease-out forwards`;
     listenBtn.appendChild(ring);
     ring.addEventListener('animationend', () => ring.remove());
   }
@@ -90,7 +99,7 @@ function initHeroCanvas() {
       float hasGlow = step(0.15, v_alpha);
       float alpha = coreAlpha * v_alpha + glowFade * u_glowAlpha * v_alpha * hasGlow;
       if (alpha < 0.002) discard;
-      gl_FragColor = vec4(0.831, 0.659, 0.263, alpha);
+      gl_FragColor = vec4(0.831 * alpha, 0.659 * alpha, 0.263 * alpha, alpha);
     }`;
 
   const LINE_VS = `
@@ -109,7 +118,7 @@ function initHeroCanvas() {
     precision mediump float;
     varying float v_alpha;
     void main() {
-      gl_FragColor = vec4(0.831, 0.659, 0.263, v_alpha);
+      gl_FragColor = vec4(0.831 * v_alpha, 0.659 * v_alpha, 0.263 * v_alpha, v_alpha);
     }`;
 
   // --- Shader helpers ---
@@ -154,7 +163,8 @@ function initHeroCanvas() {
 
   // --- Buffers ---
   const PFLOATS = 4; // x, y, size, alpha per particle
-  const particleData = new Float32Array(MAX_PARTICLES * PFLOATS);
+  const BUFFER_CAP = 4000; // max particles the GPU buffer can hold
+  const particleData = new Float32Array(BUFFER_CAP * PFLOATS);
   const particleBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
   gl.bufferData(gl.ARRAY_BUFFER, particleData.byteLength, gl.DYNAMIC_DRAW);
@@ -169,7 +179,7 @@ function initHeroCanvas() {
   // --- GL state ---
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); // premultiplied alpha blending
-  gl.clearColor(0, 0, 0, 0);
+  gl.clearColor(6/255, 6/255, 8/255, 1); // matches --bg: #060608, opaque
   gl.disable(gl.DEPTH_TEST);
 
   function resize() {
@@ -181,10 +191,13 @@ function initHeroCanvas() {
     gl.viewport(0, 0, w, h);
   }
 
+  let nextPid = 0; // unique particle ID counter
+
   function init() {
     particles = [];
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       particles.push({
+        pid: nextPid++,
         x: Math.random() * w,
         y: Math.random() * h,
         vx: (Math.random() - 0.5) * 0.4,
@@ -192,9 +205,28 @@ function initHeroCanvas() {
         r: Math.random() * 2 + 0.5,
         alpha: Math.random() * 0.4 + 0.1,
         phase: Math.random() * Math.PI * 2,
-        reactivity: 0.3 + Math.random() * 0.7
+        reactivity: 0.3 + Math.random() * 0.7,
+        rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
       });
     }
+  }
+
+  // Persistent connection fade map: key = "minPid_maxPid", value = { alpha, target }
+  const connFade = new Map();
+  const CONN_FADE_IN = 0.04;   // alpha lerp per frame toward target (fade in)
+  const CONN_FADE_OUT = 0.025; // alpha lerp per frame toward 0 (fade out)
+
+  // Audio intensity ring buffer — stores recent frames so distant particles see delayed audio
+  const RIPPLE_SPEED_BASE = 2; // px/frame
+  const RIPPLE_SPEED_VAR = 4;  // random variation per particle
+  const RIPPLE_BUF_LEN = 512;
+  const rippleBuf = new Float32Array(RIPPLE_BUF_LEN);
+  let rippleHead = 0;
+
+  function getDelayedIntensity(dist, rippleSpeed) {
+    const delayFrames = Math.min((dist / rippleSpeed) | 0, RIPPLE_BUF_LEN - 1);
+    const idx = (rippleHead - delayFrames + RIPPLE_BUF_LEN) % RIPPLE_BUF_LEN;
+    return rippleBuf[idx];
   }
 
   function draw() {
@@ -225,22 +257,31 @@ function initHeroCanvas() {
       rmsSmooth = 0;
     }
 
+    // Record current intensity into ring buffer for ripple delay
+    rippleHead = (rippleHead + 1) % RIPPLE_BUF_LEN;
+    rippleBuf[rippleHead] = audioIntensity;
+
     // --- Particle lifecycle ---
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       if (p.age !== undefined) p.age++;
       if (p.life !== undefined) {
         p.life -= p.decay;
-        if (p.life <= 0) { particles.splice(i, 1); continue; }
+        if (p.life <= 0) { p.dead = true; particles.splice(i, 1); continue; }
         p.alpha = p.baseAlpha * p.life;
       }
     }
-    if (particles.length < MAX_PARTICLES && Math.random() < 0.15) {
+    const fillRatio = Math.min(1, particles.length / MAX_PARTICLES); // 0→1 as we approach 2k
+    const audioRate = 0.15 + 0.4 * (1 - fillRatio); // 0.55 when empty → 0.15 at cap
+    const spawnRate = audioIntensity > 0.01 ? audioRate : 0.15;
+    if (particles.length < MAX_PARTICLES && Math.random() < spawnRate) {
       particles.push({
+        pid: nextPid++,
         x: Math.random() * w, y: Math.random() * h,
         vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
         r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
-        phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120
+        phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120,
+        rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
       });
     }
 
@@ -254,11 +295,37 @@ function initHeroCanvas() {
       const cell = grid.get(key);
       if (cell) cell.push(i); else grid.set(key, [i]);
     }
+    // --- Culling: mark random auto-particles for fade-out when over threshold ---
+    const autoCount = particles.reduce((n, p) => n + (p.life === undefined ? 1 : 0), 0);
+    if (autoCount > THROTTLE_START) {
+      const range = MAX_PARTICLES - THROTTLE_START;
+      const pressure = (autoCount - THROTTLE_START) / range; // 0→1 over 1600→2000
+      const toRemove = Math.random() < pressure * pressure * pressure * 0.15 ? 1 : 0;
+      if (toRemove) {
+        // Pick a random auto-generated particle and start its fade-out
+        const autoIndices = [];
+        for (let i = 0; i < particles.length; i++) {
+          if (particles[i].life === undefined) autoIndices.push(i);
+        }
+        if (autoIndices.length > 0) {
+          const idx = autoIndices[(Math.random() * autoIndices.length) | 0];
+          const p = particles[idx];
+          p.life = 1;
+          p.baseAlpha = p.alpha;
+          p.decay = 0.008 + Math.random() * 0.008; // fade over ~60-120 frames
+        }
+      }
+    }
+
     const MAX_CONN = 3;
     const connCount = new Uint8Array(particles.length);
-    const aiBrightBoost = 1 + audioIntensity * 2;
+    // Smooth line brightness separately — much slower than audioIntensity
+    lineIntensity += (audioIntensity - lineIntensity) * 0.015;
+    const aiBrightBoost = 1 + lineIntensity * 2;
     const lineAlphas = [0.06 * aiBrightBoost, 0.048 * aiBrightBoost, 0.036 * aiBrightBoost, 0.024 * aiBrightBoost, 0.012 * aiBrightBoost];
-    let lineIdx = 0;
+
+    // --- Find candidate connections this frame ---
+    const framePairs = new Set(); // track which pairs are active this frame
 
     for (const [key, cell] of grid) {
       const gx = key % cols, gy = (key / cols) | 0;
@@ -270,24 +337,33 @@ function initHeroCanvas() {
           if (!neighbor) continue;
           for (let ii = 0; ii < cell.length; ii++) {
             const ai = cell[ii];
-            if (connCount[ai] >= MAX_CONN) continue;
             const a = particles[ai];
+            if (connCount[ai] >= MAX_CONN) continue;
+            const aBurst = a.life !== undefined;
             const jStart = nk === key ? ii + 1 : 0;
             for (let jj = jStart; jj < neighbor.length; jj++) {
               const bi = neighbor[jj];
-              if (connCount[bi] >= MAX_CONN) continue;
               const b = particles[bi];
+              if (connCount[bi] >= MAX_CONN) continue;
+              if (aBurst && b.life !== undefined) continue;
               const dx = a.x - b.x, dy = a.y - b.y;
               const d2 = dx * dx + dy * dy;
-              if (d2 < 19600 && lineIdx < MAX_LINES * LFLOATS) {
+              if (d2 < 22500) { // 150px
                 const bucket = Math.min((d2 / 3920) | 0, 4);
-                const la = lineAlphas[bucket];
-                lineData[lineIdx++] = a.x;
-                lineData[lineIdx++] = a.y;
-                lineData[lineIdx++] = la;
-                lineData[lineIdx++] = b.x;
-                lineData[lineIdx++] = b.y;
-                lineData[lineIdx++] = la;
+                const edgeFade = d2 < 14400 ? 1 : 1 - (d2 - 14400) / (22500 - 14400);
+                const targetAlpha = lineAlphas[bucket] * edgeFade;
+                const pidA = a.pid, pidB = b.pid;
+                const ck = pidA < pidB ? `${pidA}_${pidB}` : `${pidB}_${pidA}`;
+                framePairs.add(ck);
+                let entry = connFade.get(ck);
+                if (!entry) {
+                  entry = { alpha: 0, target: targetAlpha, a, b };
+                  connFade.set(ck, entry);
+                } else {
+                  entry.target = targetAlpha;
+                  entry.a = a; // update refs (particles may have shifted in array)
+                  entry.b = b;
+                }
                 connCount[ai]++;
                 connCount[bi]++;
               }
@@ -296,6 +372,41 @@ function initHeroCanvas() {
         }
       }
     }
+
+    // --- Update fade map: fade in active pairs, fade out broken ones ---
+    let lineIdx = 0;
+    const toDelete = [];
+    for (const [ck, entry] of connFade) {
+      // If either particle is dead, force immediate removal
+      if (entry.a.dead || entry.b.dead) {
+        toDelete.push(ck);
+        continue;
+      }
+      if (!framePairs.has(ck)) {
+        entry.target = 0;
+      }
+      // Lerp alpha toward target
+      const rate = entry.target > entry.alpha ? CONN_FADE_IN : CONN_FADE_OUT;
+      entry.alpha += (entry.target - entry.alpha) * rate;
+
+      // Remove fully faded connections
+      if (entry.alpha < 0.001 && entry.target === 0) {
+        toDelete.push(ck);
+        continue;
+      }
+
+      // Write to line buffer using stored particle refs
+      if (lineIdx < MAX_LINES * LFLOATS) {
+        const a = entry.a, b = entry.b;
+        lineData[lineIdx++] = a.x;
+        lineData[lineIdx++] = a.y;
+        lineData[lineIdx++] = entry.alpha;
+        lineData[lineIdx++] = b.x;
+        lineData[lineIdx++] = b.y;
+        lineData[lineIdx++] = entry.alpha;
+      }
+    }
+    for (const ck of toDelete) connFade.delete(ck);
     const lineVertCount = lineIdx / 3; // 3 floats per vertex (x, y, alpha)
 
     // --- Button center ---
@@ -318,7 +429,10 @@ function initHeroCanvas() {
       const wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5;
       const fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1;
       const react = p.reactivity || 0;
-      const audioBoost = audioIntensity * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
+      const dxB = p.x - btnCX, dyB = p.y - btnCY;
+      const distFromBtn = Math.sqrt(dxB * dxB + dyB * dyB);
+      const localIntensity = getDelayedIntensity(distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
+      const audioBoost = localIntensity * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
       const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
 
@@ -332,27 +446,26 @@ function initHeroCanvas() {
       p.x += p.vx;
       p.y += p.vy;
 
-      // Audio swirl
+      // Audio swirl (uses distance-delayed intensity for ripple effect)
       {
-        const dcx = p.x - btnCX, dcy = p.y - btnCY;
-        const dist = Math.sqrt(dcx * dcx + dcy * dcy) || 1;
+        const dist = distFromBtn || 1;
         const swirlRadius = Math.max(w, h) * 0.6;
         const proximity = Math.max(0, 1 - dist / swirlRadius);
-        if (audioIntensity > 0.01 && proximity > 0) {
-          const nx = dcx / dist, ny = dcy / dist;
-          const swirlStr = audioIntensity * proximity * 0.04;
+        if (localIntensity > 0.01 && proximity > 0) {
+          const nx = dxB / dist, ny = dyB / dist;
+          const swirlStr = localIntensity * proximity * 0.04;
           p.vx += -ny * swirlStr;
           p.vy += nx * swirlStr;
-          const pull = audioIntensity * proximity * 0.012;
+          const pull = localIntensity * proximity * 0.012;
           p.vx -= nx * pull;
           p.vy -= ny * pull;
-          const jit = react * 0.25 * audioIntensity;
+          const jit = react * 0.25 * localIntensity;
           p.vx += (Math.random() - 0.5) * jit;
           p.vy += (Math.random() - 0.5) * jit;
         }
-        if (audioIntensity < 0.5 && audioIntensity > 0.001 && !heroAudioPlaying && dist > 1) {
-          const nx = dcx / dist, ny = dcy / dist;
-          const spread = (0.5 - audioIntensity) * 0.008;
+        if (localIntensity < 0.5 && localIntensity > 0.001 && !heroAudioPlaying && dist > 1) {
+          const nx = dxB / dist, ny = dyB / dist;
+          const spread = (0.5 - localIntensity) * 0.008;
           p.vx += nx * spread;
           p.vy += ny * spread;
         }
@@ -418,6 +531,8 @@ function initHeroCanvas() {
       gl.disableVertexAttribArray(pLoc.alpha);
     }
 
+    const burstCount = particles.length - autoCount;
+    counterEl.textContent = `A:${autoCount} U:${burstCount} T:${particles.length}`;
     requestAnimationFrame(draw);
   }
 
@@ -426,18 +541,19 @@ function initHeroCanvas() {
   const heroEl = document.getElementById('hero');
 
   function spawnBurst(e) {
-    if (particles.length > MAX_PARTICLES) return;
+    if (particles.length >= BUFFER_CAP) return; // hard cap at buffer size
     const rect = canvas.getBoundingClientRect();
     const scaleX = w / rect.width;
     const scaleY = h / rect.height;
     const cx = (e.clientX - rect.left) * scaleX;
     const cy = (e.clientY - rect.top) * scaleY;
-    const count = heroDragging ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 3);
+    const count = heroDragging ? 1 : 1 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 0.3 + Math.random() * 0.6;
       const baseAlpha = 0.3 + Math.random() * 0.2;
       particles.push({
+        pid: nextPid++,
         x: cx + (Math.random() - 0.5) * 20,
         y: cy + (Math.random() - 0.5) * 20,
         vx: Math.cos(angle) * speed,
@@ -448,7 +564,8 @@ function initHeroCanvas() {
         phase: Math.random() * Math.PI * 2,
         life: 1,
         decay: 0.0003 + Math.random() * 0.0007,
-        age: 0, fadeIn: 80 + Math.floor(Math.random() * 80)
+        age: 0, fadeIn: 10 + Math.floor(Math.random() * 10),
+        rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
       });
     }
   }
@@ -457,7 +574,15 @@ function initHeroCanvas() {
   heroEl.addEventListener('mousemove', (e) => { if (heroDragging) spawnBurst(e); });
   window.addEventListener('mouseup', () => { heroDragging = false; });
 
-  window.addEventListener('resize', () => { resize(); init(); });
+  window.addEventListener('resize', () => {
+    const oldW = w, oldH = h;
+    resize();
+    // Remap existing particles to new dimensions
+    if (oldW && oldH) {
+      const sx = w / oldW, sy = h / oldH;
+      for (const p of particles) { p.x *= sx; p.y *= sy; }
+    }
+  });
   resize();
   init();
   draw();
@@ -469,7 +594,7 @@ function initHeroCanvas2D() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  const PARTICLE_COUNT = 240;
+  const PARTICLE_COUNT = 500;
   let particles = [];
   let time = 0;
   const heroVis = trackVisibility('hero');
@@ -484,7 +609,8 @@ function initHeroCanvas2D() {
     if (!listenBtn) return;
     const ring = document.createElement('span');
     ring.className = 'listen-ring';
-    ring.style.animation = 'ripple 1.6s ease-out forwards';
+    const dur = 4 + Math.random() * 3; // 4–7s, variable
+    ring.style.animation = `ripple ${dur}s ease-out forwards`;
     listenBtn.appendChild(ring);
     ring.addEventListener('animationend', () => ring.remove());
   }
@@ -535,7 +661,10 @@ function initHeroCanvas2D() {
       if (p.age !== undefined) p.age++;
       if (p.life !== undefined) { p.life -= p.decay; if (p.life <= 0) { particles.splice(i, 1); continue; } p.alpha = p.baseAlpha * p.life; }
     }
-    if (particles.length < 5000 && Math.random() < 0.15) {
+    const fillRatio2d = Math.min(1, particles.length / 2000);
+    const audioRate2d = 0.15 + 0.4 * (1 - fillRatio2d);
+    const spawnRate = audioIntensity > 0.01 ? audioRate2d : 0.15;
+    if (particles.length < 2000 && Math.random() < spawnRate) {
       particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120 });
     }
     const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
@@ -572,10 +701,10 @@ function initHeroCanvas2D() {
   let heroDragging = false;
   const heroEl = document.getElementById('hero');
   function spawnBurst(e) {
-    if (particles.length > 5000) return;
+    if (particles.length > 2000) return;
     const rect = canvas.getBoundingClientRect(), scaleX = w / rect.width, scaleY = h / rect.height;
     const cx = (e.clientX - rect.left) * scaleX, cy = (e.clientY - rect.top) * scaleY;
-    const count = heroDragging ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 3);
+    const count = heroDragging ? 1 : 1 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) { const angle = Math.random() * Math.PI * 2, speed = 0.3 + Math.random() * 0.6, baseAlpha = 0.3 + Math.random() * 0.2;
       particles.push({ x: cx + (Math.random() - 0.5) * 20, y: cy + (Math.random() - 0.5) * 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r: Math.random() * 2 + 0.5, alpha: baseAlpha, baseAlpha, phase: Math.random() * Math.PI * 2, life: 1, decay: 0.0003 + Math.random() * 0.0007, age: 0, fadeIn: 80 + Math.floor(Math.random() * 80) }); }
   }
@@ -716,12 +845,25 @@ function initCSCanvas() {
   let time = 5 + Math.random() * 10;
   const vis = trackVisibility('citizen-science');
 
-  // Pre-generate some "discovery" positions
-  const discoveries = Array.from({ length: 6 }, () => ({
-    x: 0.15 + Math.random() * 0.7,
-    phase: Math.random() * Math.PI * 2,
-    freq: 0.3 + Math.random() * 0.4
-  }));
+  // Living discovery orbs — drift, fade in/out, respawn
+  const MAX_ORBS = 6;
+  function spawnOrb() {
+    return {
+      x: 0.15 + Math.random() * 0.7,
+      y: 0.4 + Math.random() * 0.2,  // near center
+      vx: (Math.random() - 0.5) * 0.000015,
+      vy: (Math.random() - 0.5) * 0.000008,
+      phase: Math.random() * Math.PI * 2,
+      freq: 0.3 + Math.random() * 0.4,
+      age: 0,
+      lifespan: 1500 + Math.random() * 2000,  // frames
+    };
+  }
+  const discoveries = Array.from({ length: MAX_ORBS }, () => {
+    const orb = spawnOrb();
+    orb.age = Math.random() * orb.lifespan * 0.8; // stagger births
+    return orb;
+  });
 
   function resize() {
     w = canvas.width = canvas.offsetWidth;
@@ -737,7 +879,7 @@ function initCSCanvas() {
     const amplitude = h * 0.15;
 
     // Draw main waveform
-    c.strokeStyle = 'rgba(58, 181, 160, 0.12)';
+    c.strokeStyle = 'rgba(58, 181, 160, 0.3)';
     c.lineWidth = 1.5;
     c.beginPath();
     for (let x = 0; x < w; x++) {
@@ -751,7 +893,7 @@ function initCSCanvas() {
     c.stroke();
 
     // Second waveform layer
-    c.strokeStyle = 'rgba(58, 181, 160, 0.06)';
+    c.strokeStyle = 'rgba(58, 181, 160, 0.15)';
     c.lineWidth = 1;
     c.beginPath();
     for (let x = 0; x < w; x++) {
@@ -763,25 +905,61 @@ function initCSCanvas() {
     }
     c.stroke();
 
-    // Discovery markers (pulsing circles)
-    discoveries.forEach(d => {
+    // Discovery orbs — drift, pulse, fade in/out
+    for (let i = 0; i < discoveries.length; i++) {
+      const d = discoveries[i];
+      d.age++;
+      d.x += d.vx;
+      d.y += d.vy;
+
+      // Respawn if dead or drifted off
+      if (d.age > d.lifespan || d.x < 0.05 || d.x > 0.95) {
+        discoveries[i] = spawnOrb();
+        continue;
+      }
+
+      // Lifecycle fade: smooth in over 15%, smooth out over 15%
+      const life = d.age / d.lifespan;
+      const envelope = life < 0.15 ? life / 0.15
+        : life > 0.85 ? (1 - life) / 0.15
+        : 1;
+
       const px = d.x * w;
+      const py = d.y * h;
       const pulse = Math.sin(time * d.freq + d.phase) * 0.5 + 0.5;
       const radius = 3 + pulse * 6;
-      const alpha = 0.1 + pulse * 0.15;
+      const alpha = (0.25 + pulse * 0.3) * envelope;
 
       c.fillStyle = `rgba(58, 181, 160, ${alpha})`;
       c.beginPath();
-      c.arc(px, centerY, radius, 0, Math.PI * 2);
+      c.arc(px, py, radius, 0, Math.PI * 2);
       c.fill();
 
       // Outer ring
       c.strokeStyle = `rgba(58, 181, 160, ${alpha * 0.4})`;
       c.lineWidth = 1;
       c.beginPath();
-      c.arc(px, centerY, radius + 8 + pulse * 5, 0, Math.PI * 2);
+      c.arc(px, py, radius + 8 + pulse * 5, 0, Math.PI * 2);
       c.stroke();
-    });
+    }
+
+    // Edge fade — erase edges with destination-out gradient
+    const fadeW = w * 0.15;
+    c.save();
+    c.globalCompositeOperation = 'destination-out';
+    // Left edge
+    const leftGrad = c.createLinearGradient(0, 0, fadeW, 0);
+    leftGrad.addColorStop(0, 'rgba(0,0,0,1)');
+    leftGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = leftGrad;
+    c.fillRect(0, 0, fadeW, h);
+    // Right edge
+    const rightGrad = c.createLinearGradient(w - fadeW, 0, w, 0);
+    rightGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    rightGrad.addColorStop(1, 'rgba(0,0,0,1)');
+    c.fillStyle = rightGrad;
+    c.fillRect(w - fadeW, 0, fadeW, h);
+    c.restore();
 
     requestAnimationFrame(draw);
   }
@@ -791,14 +969,14 @@ function initCSCanvas() {
   draw();
 }
 
-// ===== Planetarium: Dome starfield =====
-function initDomeCanvas() {
-  const canvas = document.getElementById('dome-canvas');
+// ===== Education: Dome starfield =====
+function initEduCanvas() {
+  const canvas = document.getElementById('edu-canvas');
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
   let time = 5 + Math.random() * 10;
-  const vis = trackVisibility('planetarium');
+  const vis = trackVisibility('education');
   const STARS = 200;
   let stars = [];
 
@@ -878,7 +1056,7 @@ function initDomeCanvas() {
 
   // Click + drag to add stars
   let domeDragging = false;
-  const domeEl = document.getElementById('planetarium');
+  const domeEl = document.getElementById('education');
 
   function spawnStars(e) {
     if (stars.length > 5000) return;
@@ -933,8 +1111,8 @@ function initSynthWave() {
     c.clearRect(0, 0, w, h);
     time += 0.011;
 
-    const centerY = h / 2;
-    const amp = h * 0.42;
+    const centerY = h * 0.58;
+    const amp = h * 0.36;
     const analyser = getStemAnalyser();
 
     // Smooth morph between idle and live
@@ -948,13 +1126,17 @@ function initSynthWave() {
       if (!waveData || waveData.length !== bufLen) waveData = new Uint8Array(bufLen);
       analyser.getByteTimeDomainData(waveData);
       liveY = new Float32Array(w);
+      // Compute DC offset from raw data
+      let dcSum = 0;
+      for (let i = 0; i < bufLen; i++) dcSum += waveData[i] - 128;
+      const dcOffset = dcSum / bufLen / 128;
       for (let x = 0; x < w; x++) {
         const i = (x / w) * bufLen;
         const i0 = Math.floor(i), i1 = Math.min(i0 + 1, bufLen - 1);
         const frac = i - i0;
         const v0 = (waveData[i0] - 128) / 128;
         const v1 = (waveData[i1] - 128) / 128;
-        liveY[x] = (v0 + (v1 - v0) * frac);
+        liveY[x] = (v0 + (v1 - v0) * frac) - dcOffset;
       }
     }
 
@@ -971,7 +1153,7 @@ function initSynthWave() {
     }
 
     // Glow layer
-    const glowAlpha = 0.08 + liveBlend * 0.12;
+    const glowAlpha = 0.06 + liveBlend * 0.14;
     c.strokeStyle = `rgba(139, 110, 192, ${glowAlpha})`;
     c.lineWidth = 5 + liveBlend * 3;
     c.beginPath();
@@ -982,8 +1164,8 @@ function initSynthWave() {
     c.stroke();
 
     // Sharp line
-    c.strokeStyle = `rgba(139, 110, 192, ${0.5 + liveBlend * 0.4})`;
-    c.lineWidth = 2;
+    c.strokeStyle = `rgba(139, 110, 192, ${0.28 + liveBlend * 0.62})`;
+    c.lineWidth = 1.5 + liveBlend * 0.5;
     c.beginPath();
     for (let x = 0; x < w; x++) {
       const y = getY(x);
@@ -995,7 +1177,7 @@ function initSynthWave() {
     c.lineTo(w, centerY);
     c.lineTo(0, centerY);
     c.closePath();
-    c.fillStyle = `rgba(139, 110, 192, ${0.04 + liveBlend * 0.04})`;
+    c.fillStyle = `rgba(139, 110, 192, ${0.025 + liveBlend * 0.055})`;
     c.fill();
 
     requestAnimationFrame(draw);
@@ -1071,7 +1253,7 @@ function initSpectrumCanvas() {
       const barHeight = bar.currentHeight;
 
       const x = i * barWidth;
-      const alpha = 0.04 + combined * 0.08;
+      const alpha = 0.12 + combined * 0.2;
 
       // Main bar
       const grad = c.createLinearGradient(x, centerY, x, centerY - barHeight);
@@ -1251,7 +1433,7 @@ function initGlobeCanvas() {
         if (!drawing) { c.moveTo(p.sx, p.sy); drawing = true; }
         else c.lineTo(p.sx, p.sy);
       }
-      c.strokeStyle = 'rgba(212, 168, 67, 0.15)';
+      c.strokeStyle = 'rgba(212, 168, 67, 0.3)';
       c.stroke();
     }
 
@@ -1271,7 +1453,7 @@ function initGlobeCanvas() {
         if (!drawing) { c.moveTo(p.sx, p.sy); drawing = true; }
         else c.lineTo(p.sx, p.sy);
       }
-      c.strokeStyle = 'rgba(212, 168, 67, 0.11)';
+      c.strokeStyle = 'rgba(212, 168, 67, 0.22)';
       c.stroke();
     }
 
@@ -1322,7 +1504,7 @@ function initGlobeCanvas() {
       const rp = project(ripples[i].x, ripples[i].y, ripples[i].z);
       if (rp.z < 0) continue;
       const progress = ripples[i].age / 80;
-      const alpha = rp.z * 0.25 * (1 - progress);
+      const alpha = rp.z * 0.5 * (1 - progress);
       const r = 3 + progress * 20;
       c.strokeStyle = `rgba(212, 168, 67, ${alpha})`;
       c.lineWidth = 0.8 * (1 - progress);
@@ -1361,7 +1543,7 @@ function initGlobeCanvas() {
         if (!drawing) { c.moveTo(p.sx, p.sy); drawing = true; }
         else c.lineTo(p.sx, p.sy);
       }
-      const arcAlpha = Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1) * 0.1;
+      const arcAlpha = Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1) * 0.25;
       c.strokeStyle = `rgba(212, 168, 67, ${arcAlpha})`;
       c.lineWidth = 0.6;
       c.stroke();
@@ -1375,7 +1557,7 @@ function initGlobeCanvas() {
         pkt.from.z * ta + pkt.to.z * tb
       );
       if (tp.z > 0) {
-        const dotAlpha = tp.z * 0.4 * Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1);
+        const dotAlpha = tp.z * 0.7 * Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1);
         c.fillStyle = `rgba(212, 168, 67, ${dotAlpha})`;
         c.beginPath();
         c.arc(tp.sx, tp.sy, 2, 0, Math.PI * 2);
@@ -1395,7 +1577,7 @@ function initGlobeCanvas() {
       const g = pt.glow;
 
       if (g > 0.01) {
-        const a = depthAlpha * (0.15 + pulse * 0.25) * g;
+        const a = depthAlpha * (0.3 + pulse * 0.45) * g;
         const r = (1.5 + pulse * 2) * g;
         c.fillStyle = `rgba(212, 168, 67, ${a})`;
         c.beginPath();
@@ -1403,14 +1585,14 @@ function initGlobeCanvas() {
         c.fill();
 
         if (g > 0.3) {
-          c.strokeStyle = `rgba(212, 168, 67, ${a * 0.3})`;
+          c.strokeStyle = `rgba(212, 168, 67, ${a * 0.4})`;
           c.lineWidth = 0.5;
           c.beginPath();
           c.arc(pt.sx, pt.sy, r + 3 + pulse * 3, 0, Math.PI * 2);
           c.stroke();
         }
       } else {
-        const a = depthAlpha * 0.08;
+        const a = depthAlpha * 0.2;
         c.fillStyle = `rgba(200, 200, 210, ${a})`;
         c.beginPath();
         c.arc(pt.sx, pt.sy, 0.8, 0, Math.PI * 2);
@@ -1431,7 +1613,7 @@ export function initVisuals() {
   initHeroCanvas();
   initVisionCanvas();
   initCSCanvas();
-  initDomeCanvas();
+  initEduCanvas();
   initSynthWave();
   initSpectrumCanvas();
   initGlobeCanvas();
