@@ -493,7 +493,6 @@ a:hover { opacity: 0.7; }
 }
 
 .cascade-step:hover {
-  transform: translateY(-4px);
   border-color: rgba(212, 168, 67, 0.15);
 }
 

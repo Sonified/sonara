@@ -487,10 +487,20 @@ function initHeroCanvas() {
 
       p.vx *= 0.985;
       p.vy *= 0.985;
-      if (p.x < 0) p.x = w;
-      if (p.x > w) p.x = 0;
-      if (p.y < 0) p.y = h;
-      if (p.y > h) p.y = 0;
+      let wrapped = false;
+      if (p.x < 0) { p.x = w; wrapped = true; }
+      if (p.x > w) { p.x = 0; wrapped = true; }
+      if (p.y < 0) { p.y = h; wrapped = true; }
+      if (p.y > h) { p.y = 0; wrapped = true; }
+      if (wrapped) {
+        // Kill any fading connections to avoid screen-spanning lines
+        const pid = p.pid;
+        for (const [ck] of connFade) {
+          if (ck.startsWith(pid + '_') || ck.endsWith('_' + pid)) {
+            connFade.delete(ck);
+          }
+        }
+      }
     }
     const activeCount = particles.length;
 
