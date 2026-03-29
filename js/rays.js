@@ -9,15 +9,16 @@
   const dpr = window.devicePixelRatio || 1;
   let w, h;
   const START_DELAY = 2.0;
-  const SWEEP_DURATION = 3.5;
-  const PAUSE_MIN = 6.0;
-  const PAUSE_MAX = 10.0;
+  const SWEEP_DURATION = 3.0;
+  const PAUSE_MIN = 5.0;
+  const PAUSE_MAX = 9.0;
   const SWEEP_TRAVEL = 1.4;
   let phase = 'delay';
   let phaseTime = 0;
   let currentPauseDuration = PAUSE_MIN + Math.random() * (PAUSE_MAX - PAUSE_MIN);
   let lastFrameTime = null;
   let raysReady = false;
+  let spawnCarry = 0;
 
   canvas.style.opacity = '0';
 
@@ -37,6 +38,11 @@
   particleCanvas.style.opacity = '0';
   canvas.parentNode.appendChild(particleCanvas);
   const pCtx = particleCanvas.getContext('2d');
+
+  function hideRaysImmediately() {
+    canvas.style.opacity = '0';
+    particleCanvas.style.opacity = '0';
+  }
 
   const textCanvas = document.createElement('canvas');
   const tc = textCanvas.getContext('2d');
@@ -148,21 +154,23 @@
   }
 
   const particles = [];
+  const MAX_PARTICLES = 140;
 
-  function spawnParticle(x, y) {
-    if (particles.length > 100) return;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 0.03 + Math.random() * 0.08;
+  function spawnParticle(lx, ly, tw) {
+    if (particles.length > MAX_PARTICLES) return;
+    const angle = (Math.random() - 0.5) * 1.6;
+    const speed = 0.12 + Math.random() * 0.38;
+    const baseAlpha = 0.3 + Math.random() * 0.3;
     particles.push({
-      x: x + (Math.random() - 0.5) * 320,
-      y: y + (Math.random() - 0.5) * 320,
+      x: lx + tw * 0.08 + (Math.random() - 0.5) * tw * 0.18,
+      y: ly + (Math.random() - 0.5) * 520,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
+      alpha: baseAlpha,
+      baseAlpha,
       life: 1,
-      age: 0,
-      fadeIn: 80 + Math.random() * 80,
-      decay: 0.0025 + Math.random() * 0.005,
-      size: 0.8 + Math.random() * 1.2
+      decay: 0.0011 + Math.random() * 0.0021,
+      size: 1.8 + Math.random() * 3.4
     });
   }
 
@@ -171,8 +179,8 @@
       const p = particles[i];
       p.x += p.vx;
       p.y += p.vy;
-      p.age++;
       p.life -= p.decay;
+      p.alpha = p.baseAlpha * p.life;
       if (p.life <= 0) particles.splice(i, 1);
     }
   }
@@ -186,11 +194,11 @@
         const a = particles[i], b = particles[j];
         const dx = a.x - b.x, dy = a.y - b.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 120) {
-          const lineAlpha = (1 - dist / 120) * Math.min(a.life, b.life) * 0.12;
+        if (dist < 225) {
+          const lineAlpha = (1 - dist / 225) * Math.min(a.life, b.life) * 0.4;
           pCtx.globalAlpha = lineAlpha;
           pCtx.strokeStyle = 'rgba(255, 230, 170, 1)';
-          pCtx.lineWidth = 0.5;
+          pCtx.lineWidth = 0.8;
           pCtx.beginPath();
           pCtx.moveTo(a.x, a.y);
           pCtx.lineTo(b.x, b.y);
@@ -200,8 +208,7 @@
     }
 
     for (const p of particles) {
-      const fadeInMult = Math.min(1, p.age / p.fadeIn);
-      let alpha = p.life * 0.25 * fadeInMult;
+      let alpha = p.alpha;
       if (p.x > textR - fadeZone) {
         alpha *= Math.max(0, (textR - p.x) / fadeZone);
       }
@@ -231,11 +238,13 @@
         phase = 'pause';
         phaseTime -= SWEEP_DURATION;
         currentPauseDuration = PAUSE_MIN + Math.random() * (PAUSE_MAX - PAUSE_MIN);
+        spawnCarry = 0;
         continue;
       }
       if (phase === 'pause' && phaseTime >= currentPauseDuration) {
         phase = 'sweep';
         phaseTime -= currentPauseDuration;
+        spawnCarry = 0;
         continue;
       }
       break;
@@ -266,7 +275,7 @@
       const t = Math.max(0, Math.min(1, 1 - (textL - lightX) / (textW * 0.6)));
       breath *= smooth(t);
     } else if (sweeping && lightX > textR) {
-      const t = Math.max(0, Math.min(1, 1 - (lightX - textR) / (textW * 0.35)));
+      const t = Math.max(0, Math.min(1, 1 - (lightX - textR) / (textW * 0.22)));
       breath *= smooth(t);
     }
     if (breath < 0.08) breath = 0;
@@ -330,11 +339,19 @@
     }
 
     const glowRadius = textW * 0.6;
-    const glowHitsText = sweeping && breath > 0.01 && lightProgress < 0.8 &&
+    const glowHitsText = sweeping && breath > 0.01 &&
       lightX + glowRadius > textL && lightX - glowRadius < textR;
 
-    if (glowHitsText && Math.random() < 0.5) {
-      spawnParticle(lightX + textW * 0.25, lightY);
+    if (glowHitsText) {
+      const particleLeadX = lightX + textW * 0.22;
+      const spawnRate = 82 * breath;
+      spawnCarry += spawnRate * dt;
+      while (spawnCarry >= 1 && particles.length < MAX_PARTICLES) {
+        spawnParticle(particleLeadX, lightY, textW);
+        spawnCarry -= 1;
+      }
+    } else {
+      spawnCarry = 0;
     }
 
     tickParticles();
@@ -344,6 +361,8 @@
   }
 
   window.addEventListener('resize', resize);
+  window.addEventListener('beforeunload', hideRaysImmediately);
+  window.addEventListener('pagehide', hideRaysImmediately);
   document.fonts.ready.then(() => {
     resize();
     draw();

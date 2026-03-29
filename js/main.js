@@ -245,6 +245,7 @@ import { initVisuals } from './visuals.js?v=8';
   }
 
   const paperTitle = document.querySelector('.cs-paper-title');
+  const heroBtn = document.querySelector('.listen-btn');
   const fadingButtons = new Set();
 
   // Track auto-end timers so we can cancel them on manual stop
@@ -262,8 +263,12 @@ import { initVisuals } from './visuals.js?v=8';
     }
     const p = stop(soundId);
     const cleanup = () => {
-      btn.classList.remove('playing', 'fading');
+      btn.classList.remove('playing', 'fading', 'freeze-pulse');
+      btn.style.borderColor = '';
+      btn.style.backgroundColor = '';
+      btn.style.boxShadow = '';
       fadingButtons.delete(btn);
+      if (soundId === 'hero') clearHeroHintCopy();
       if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
     };
     if (p && typeof p.then === 'function') p.then(cleanup);
@@ -271,9 +276,13 @@ import { initVisuals } from './visuals.js?v=8';
   }
 
   function autoEnd(btn, soundId) {
-    btn.classList.remove('playing', 'fading');
+    btn.classList.remove('playing', 'fading', 'freeze-pulse');
+    btn.style.borderColor = '';
+    btn.style.backgroundColor = '';
+    btn.style.boxShadow = '';
     fadingButtons.delete(btn);
     autoEndTimers.delete(btn);
+    if (soundId === 'hero') clearHeroHintCopy();
     if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
     stop(soundId);
   }
@@ -297,7 +306,12 @@ import { initVisuals } from './visuals.js?v=8';
     btn.addEventListener('click', async () => {
       const soundId = getSoundId(btn);
       if (!soundId) return;
-      btn.classList.add('clicked');
+      if (btn.classList.contains('listen-btn')) {
+        btn.classList.add('settled');
+      }
+      if (!btn.classList.contains('listen-btn')) {
+        btn.classList.add('clicked');
+      }
       // Show scroll hint after 5s on first listen click, then pulse later
       if (btn.classList.contains('listen-btn')) {
         const hint = document.querySelector('.scroll-hint');
@@ -334,6 +348,7 @@ import { initVisuals } from './visuals.js?v=8';
         const result = await play(soundId);
         if (result === false) return; // already playing somehow
         btn.classList.add('playing');
+        if (soundId === 'hero') scheduleHeroHintCopy();
         if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.add('pulsing');
         // Finite-duration sound: poll audio clock for precise end
         if (typeof result === 'number') {
@@ -344,7 +359,6 @@ import { initVisuals } from './visuals.js?v=8';
   });
 
   // ===== Hero "Listen to the solar wind" button RMS shimmer =====
-  const heroBtn = document.querySelector('.listen-btn');
   if (heroBtn) {
     const heroRmsData = new Uint8Array(128);
     let smoothAlpha = 0;
@@ -373,6 +387,26 @@ import { initVisuals } from './visuals.js?v=8';
   // ===== Scroll Hint Fade =====
   // Only show/hide based on hero visibility AFTER the hint has been revealed by listen click
   const scrollHint = document.querySelector('.scroll-hint');
+  let heroHintCopyTimer = null;
+
+  function clearHeroHintCopy() {
+    if (heroHintCopyTimer) {
+      clearTimeout(heroHintCopyTimer);
+      heroHintCopyTimer = null;
+    }
+    if (scrollHint) scrollHint.classList.remove('show-copy');
+  }
+
+  function scheduleHeroHintCopy() {
+    if (!scrollHint || heroHintCopyTimer || scrollHint.dataset.dismissed === '1') return;
+    heroHintCopyTimer = setTimeout(() => {
+      heroHintCopyTimer = null;
+      if (heroBtn && heroBtn.classList.contains('playing') && scrollHint.classList.contains('visible')) {
+        scrollHint.classList.add('show-copy');
+      }
+    }, 15000);
+  }
+
   if (scrollHint) {
     const hintObs = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
@@ -387,7 +421,9 @@ import { initVisuals } from './visuals.js?v=8';
           // One-time hint: once user leaves hero after seeing it, never show again.
           scrollHint.style.opacity = '0';
           scrollHint.classList.remove('pulsing');
+          scrollHint.classList.remove('show-copy');
           scrollHint.dataset.dismissed = '1';
+          clearHeroHintCopy();
           hintObs.disconnect();
         }
       });
@@ -521,6 +557,10 @@ import { initVisuals } from './visuals.js?v=8';
   }, { passive: true });
 
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      return;
+    }
     if (['ArrowDown', 'PageDown', ' ', 'Spacebar'].includes(e.key)) {
       startCueFade('down');
     } else if (['ArrowUp', 'PageUp'].includes(e.key)) {

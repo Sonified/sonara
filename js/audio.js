@@ -346,8 +346,22 @@ let seqConv = null;
 let seqKickBuf = null;
 let seqHatBuf = null;
 let seqLooping = (() => { try { return localStorage.getItem('sonara-loop') === '1'; } catch(e) { return false; } })();
-let seqReverbOn = (() => { try { return localStorage.getItem('sonara-reverb') !== '0'; } catch(e) { return true; } })();
-let seqDelayOn = (() => { try { return localStorage.getItem('sonara-delay') === '1'; } catch(e) { return false; } })();
+let seqReverbOn = (() => {
+  try {
+    const saved = localStorage.getItem('sonara-reverb');
+    return saved === null ? true : saved !== '0';
+  } catch(e) {
+    return true;
+  }
+})();
+let seqDelayOn = (() => {
+  try {
+    const saved = localStorage.getItem('sonara-delay');
+    return saved === null ? true : saved === '1';
+  } catch(e) {
+    return true;
+  }
+})();
 let seqDelayNode = null;
 let seqDelayFeedback = null;
 let seqDelayGain = null;

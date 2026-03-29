@@ -968,13 +968,14 @@ function initCSCanvas() {
     const speedMult = 1 + csSpeedBoost * CS_SPEED_MULT_MAX;
     waveTime += baseSpeed * speedMult;
     orbTime += baseSpeed;
+    const waveThicknessBoost = csSpeedBoost * 3.2;
 
     const centerY = h / 2;
     const amplitude = h * 0.15;
 
     // Draw main waveform
     c.strokeStyle = 'rgba(58, 181, 160, 0.3)';
-    c.lineWidth = 1.5;
+    c.lineWidth = 1.5 + waveThicknessBoost;
     c.beginPath();
     for (let x = 0; x < w; x++) {
       const t = x / w;
@@ -988,7 +989,7 @@ function initCSCanvas() {
 
     // Second waveform layer
     c.strokeStyle = 'rgba(58, 181, 160, 0.15)';
-    c.lineWidth = 1;
+    c.lineWidth = 1 + waveThicknessBoost * 0.45;
     c.beginPath();
     for (let x = 0; x < w; x++) {
       const t = x / w;

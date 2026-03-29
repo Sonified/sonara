@@ -18,20 +18,24 @@
   <section id="hero" class="section" data-sound="hero">
     <canvas id="hero-canvas"></canvas>
     <div class="hero-inner">
-      <div class="hero-badge">NASA Science Activated</div>
+      <!-- <div class="hero-badge">NASA Science Activated</div> -->
       <h1 class="hero-title"><span class="glow-wrap">SONARA</span><canvas id="rays-canvas"></canvas></h1>
       <p class="hero-expansion">Sounds of NASA: Research Activated</p>
       <p class="hero-tagline">Turning satellite data into sound. Turning<br>musicians into scientists.</p>
-      <button class="listen-btn sound-trigger" aria-label="Listen to the solar wind">
-        <span class="listen-ring"></span>
-        <span class="listen-ring ring-2"></span>
-        <span class="listen-icon">
-          <svg width="18" height="20" viewBox="0 0 18 20" fill="none"><path d="M2 3.5L16 10L2 16.5V3.5Z" fill="currentColor"/></svg>
-        </span>
-        <span class="listen-text">Listen to the solar wind</span>
-      </button>
+      <div class="hero-audio-meta">
+        <button class="listen-btn sound-trigger" aria-label="Listen to the solar wind">
+          <span class="listen-ring"></span>
+          <span class="listen-ring ring-2"></span>
+          <span class="listen-icon">
+            <svg width="18" height="20" viewBox="0 0 18 20" fill="none"><path d="M2 3.5L16 10L2 16.5V3.5Z" fill="currentColor"/></svg>
+          </span>
+          <span class="listen-text">Listen to the solar wind</span>
+        </button>
+        <div class="hero-data-caption">OMNI Helium Velocity 1964-2025</div>
+      </div>
     </div>
     <div class="scroll-hint">
+      <span class="scroll-hint-text">Scroll Down</span>
       <span class="section-down-chevron">⌄</span>
     </div>
   </section>
