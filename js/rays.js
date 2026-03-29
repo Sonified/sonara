@@ -3,6 +3,9 @@
  */
 
 (function() {
+  const isMobileView = ('ontouchstart' in window) && window.innerWidth <= 768;
+  if (isMobileView) return; // skip light rays on mobile
+
   const canvas = document.getElementById('rays-canvas');
   if (!canvas) return;
 
