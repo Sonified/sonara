@@ -4,7 +4,6 @@
 
 (function() {
   const isMobileView = ('ontouchstart' in window) && window.innerWidth <= 768;
-  if (isMobileView) return; // skip light rays on mobile
 
   const canvas = document.getElementById('rays-canvas');
   if (!canvas) return;
@@ -26,11 +25,14 @@
   let rafId = null;
 
   canvas.style.opacity = '0';
+  if (isMobileView) canvas.style.display = 'none';
 
-  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false });
-  if (!gl) return;
-  gl.clearColor(0, 0, 0, 0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
+  const gl = isMobileView ? null : canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false });
+  if (!gl && !isMobileView) return;
+  if (gl) {
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
 
   const particleCanvas = document.createElement('canvas');
   particleCanvas.style.cssText = canvas.style.cssText;
@@ -52,96 +54,100 @@
   const textCanvas = document.createElement('canvas');
   const tc = textCanvas.getContext('2d');
 
-  const vertSrc = `
-    attribute vec2 a_pos;
-    varying vec2 v_uv;
-    void main() {
-      v_uv = a_pos * 0.5 + 0.5;
-      gl_Position = vec4(a_pos, 0.0, 1.0);
-    }
-  `;
+  let prog, uOrigin, uStrength, uBreath, tex;
 
-  const fragSrc = `
-    precision mediump float;
-    varying vec2 v_uv;
-    uniform sampler2D u_text;
-    uniform vec2 u_origin;
-    uniform float u_strength;
-    uniform float u_breath;
-
-    const int SAMPLES = 40;
-
-    void main() {
-      vec2 uv = v_uv;
-      vec2 toPixel = uv - u_origin;
-      vec3 color = vec3(0.0);
-
-      for (int i = 0; i < SAMPLES; i++) {
-        float t = float(i) / float(SAMPLES);
-        float scale = 1.0 - t * u_strength;
-        vec2 sampleUV = u_origin + toPixel * scale;
-        float weight = 1.0 - t * 0.5;
-        vec4 s = texture2D(u_text, sampleUV);
-        color += s.rgb * s.a * weight;
+  if (gl) {
+    const vertSrc = `
+      attribute vec2 a_pos;
+      varying vec2 v_uv;
+      void main() {
+        v_uv = a_pos * 0.5 + 0.5;
+        gl_Position = vec4(a_pos, 0.0, 1.0);
       }
+    `;
 
-      color *= u_breath * 0.165;
-      color = color / (1.0 + color);
-      float alpha = (color.r + color.g + color.b) / 3.0;
+    const fragSrc = `
+      precision mediump float;
+      varying vec2 v_uv;
+      uniform sampler2D u_text;
+      uniform vec2 u_origin;
+      uniform float u_strength;
+      uniform float u_breath;
 
-      gl_FragColor = vec4(color, alpha);
+      const int SAMPLES = 40;
+
+      void main() {
+        vec2 uv = v_uv;
+        vec2 toPixel = uv - u_origin;
+        vec3 color = vec3(0.0);
+
+        for (int i = 0; i < SAMPLES; i++) {
+          float t = float(i) / float(SAMPLES);
+          float scale = 1.0 - t * u_strength;
+          vec2 sampleUV = u_origin + toPixel * scale;
+          float weight = 1.0 - t * 0.5;
+          vec4 s = texture2D(u_text, sampleUV);
+          color += s.rgb * s.a * weight;
+        }
+
+        color *= u_breath * 0.165;
+        color = color / (1.0 + color);
+        float alpha = (color.r + color.g + color.b) / 3.0;
+
+        gl_FragColor = vec4(color, alpha);
+      }
+    `;
+
+    function compileShader(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error('Shader compile:', gl.getShaderInfoLog(s));
+        return null;
+      }
+      return s;
     }
-  `;
 
-  function compileShader(type, src) {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.error('Shader compile:', gl.getShaderInfoLog(s));
-      return null;
-    }
-    return s;
+    const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
+    const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
+    if (!vs || !fs) return;
+    prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
+    gl.useProgram(prog);
+
+    const quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(prog, 'a_pos');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    uOrigin = gl.getUniformLocation(prog, 'u_origin');
+    uStrength = gl.getUniformLocation(prog, 'u_strength');
+    uBreath = gl.getUniformLocation(prog, 'u_breath');
+
+    tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 0])
+    );
   }
-
-  const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
-  const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
-  if (!vs || !fs) return;
-  const prog = gl.createProgram();
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
-  gl.useProgram(prog);
-
-  const quad = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
-  const aPos = gl.getAttribLocation(prog, 'a_pos');
-  gl.enableVertexAttribArray(aPos);
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-
-  const uOrigin = gl.getUniformLocation(prog, 'u_origin');
-  const uStrength = gl.getUniformLocation(prog, 'u_strength');
-  const uBreath = gl.getUniformLocation(prog, 'u_breath');
-
-  const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    1,
-    1,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    new Uint8Array([0, 0, 0, 0])
-  );
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
@@ -149,10 +155,12 @@
     h = rect.height;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    textCanvas.width = w * dpr;
-    textCanvas.height = h * dpr;
-    tc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (gl) {
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      textCanvas.width = w * dpr;
+      textCanvas.height = h * dpr;
+      tc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
     particleCanvas.width = w * dpr;
     particleCanvas.height = h * dpr;
     pCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -290,69 +298,71 @@
 
     const maskX = lightX;
 
-    tc.clearRect(0, 0, w, h);
-    const fontSize = parseFloat(style.fontSize);
-    tc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
-    tc.textBaseline = 'middle';
-    tc.letterSpacing = style.letterSpacing;
-    const rootStyle = getComputedStyle(document.documentElement);
-    const textColor = rootStyle.getPropertyValue('--text').trim() || '#e8e6e3';
-    const accentColor = rootStyle.getPropertyValue('--accent').trim() || '#d4a843';
-    const textGradient = tc.createLinearGradient(textL, textCY, textR, textCY);
-    textGradient.addColorStop(0, textColor);
-    textGradient.addColorStop(0.72, accentColor);
-    textGradient.addColorStop(1, accentColor);
-    tc.fillStyle = textGradient;
+    if (!isMobileView) {
+      tc.clearRect(0, 0, w, h);
+      const fontSize = parseFloat(style.fontSize);
+      tc.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+      tc.textBaseline = 'middle';
+      tc.letterSpacing = style.letterSpacing;
+      const rootStyle = getComputedStyle(document.documentElement);
+      const textColor = rootStyle.getPropertyValue('--text').trim() || '#e8e6e3';
+      const accentColor = rootStyle.getPropertyValue('--accent').trim() || '#d4a843';
+      const textGradient = tc.createLinearGradient(textL, textCY, textR, textCY);
+      textGradient.addColorStop(0, textColor);
+      textGradient.addColorStop(0.72, accentColor);
+      textGradient.addColorStop(1, accentColor);
+      tc.fillStyle = textGradient;
 
-    const measured = tc.measureText('SONARA');
-    const scaleX = spanRect.width / measured.width;
-    tc.save();
-    tc.translate(textL, textCY);
-    tc.scale(scaleX, 1);
-    tc.textAlign = 'left';
-    tc.fillText('SONARA', 0, 0);
-    tc.restore();
+      const measured = tc.measureText('SONARA');
+      const scaleX = spanRect.width / measured.width;
+      tc.save();
+      tc.translate(textL, textCY);
+      tc.scale(scaleX, 1);
+      tc.textAlign = 'left';
+      tc.fillText('SONARA', 0, 0);
+      tc.restore();
 
-    tc.globalCompositeOperation = 'destination-in';
-    const mask = tc.createRadialGradient(maskX, lightY, 0, maskX, lightY, textW * 1.05);
-    mask.addColorStop(0, 'rgba(255,255,255,1)');
-    mask.addColorStop(0.3, 'rgba(255,255,255,0.8)');
-    mask.addColorStop(0.58, 'rgba(255,255,255,0.4)');
-    mask.addColorStop(0.82, 'rgba(255,255,255,0.1)');
-    mask.addColorStop(1, 'rgba(255,255,255,0)');
-    tc.fillStyle = mask;
-    tc.fillRect(0, 0, w, h);
-    tc.globalCompositeOperation = 'source-over';
+      tc.globalCompositeOperation = 'destination-in';
+      const mask = tc.createRadialGradient(maskX, lightY, 0, maskX, lightY, textW * 1.05);
+      mask.addColorStop(0, 'rgba(255,255,255,1)');
+      mask.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+      mask.addColorStop(0.58, 'rgba(255,255,255,0.4)');
+      mask.addColorStop(0.82, 'rgba(255,255,255,0.1)');
+      mask.addColorStop(1, 'rgba(255,255,255,0)');
+      tc.fillStyle = mask;
+      tc.fillRect(0, 0, w, h);
+      tc.globalCompositeOperation = 'source-over';
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
 
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+      gl.disable(gl.BLEND);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
 
-    gl.disable(gl.BLEND);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(prog);
+      const originU = maskX / w;
+      const originV = lightY / h;
+      gl.uniform2f(uOrigin, originU, originV);
+      gl.uniform1f(uStrength, 0.12);
+      gl.uniform1f(uBreath, breath);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
 
-    gl.useProgram(prog);
-    const originU = maskX / w;
-    const originV = lightY / h;
-    gl.uniform2f(uOrigin, originU, originV);
-    gl.uniform1f(uStrength, 0.12);
-    gl.uniform1f(uBreath, breath);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-    if (!raysReady && breath > 0.01) {
+    if (!raysReady && (isMobileView || breath > 0.01)) {
       raysReady = true;
-      canvas.style.opacity = '1';
+      canvas.style.opacity = isMobileView ? '0' : '1';
       particleCanvas.style.opacity = '1';
     }
 
     const glowRadius = textW * 0.6;
-    const glowHitsText = sweeping && breath > 0.01 &&
-      lightX + glowRadius > textL && lightX - glowRadius < textR;
+    const glowHitsText = isMobileView
+      ? (sweeping && lightX + glowRadius > textL && lightX - glowRadius < textR)
+      : (sweeping && breath > 0.01 && lightX + glowRadius > textL && lightX - glowRadius < textR);
 
     if (glowHitsText) {
       const particleLeadX = lightX + textW * 0.22;
-      const spawnRate = 82 * breath;
+      const spawnRate = isMobileView ? 60 : 82 * breath;
       spawnCarry += spawnRate * dt;
       while (spawnCarry >= 1 && particles.length < MAX_PARTICLES) {
         spawnParticle(particleLeadX, lightY, textW);
