@@ -32,7 +32,7 @@
       </button>
     </div>
     <div class="scroll-hint">
-      <span>Scroll to explore</span>
+      <span class="scroll-chevron">⌄</span>
       <div class="scroll-arrow"></div>
     </div>
   </section>
@@ -45,21 +45,23 @@
       <div class="vision-center">
         <div class="section-label">The Vision</div>
         <h2 class="vision-headline">What if science<br>had a soundtrack?</h2>
-        <p class="vision-body">NASA satellites record the electromagnetic signatures of the sun, solar wind, and Earth's magnetosphere every second. SONARA transforms that data into sound, unlocking three powerful pathways: citizen science, creative collaboration, and immersive education.</p>
+        <p class="vision-body">NASA satellites record the electromagnetic signatures of the sun, solar wind, and Earth's magnetosphere every second. <em>SONARA</em> transforms that data into sound, unlocking three powerful pathways: citizen science, creative collaboration, and immersive education.</p>
       </div>
       <div class="curiosity-cascade">
         <div class="cascade-step" data-step="1">
-          <div class="cascade-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+          <div class="cascade-icon"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
           <p>A producer downloads a sample pack. Uses a coronal mass ejection as a kick drum.</p>
         </div>
         <div class="cascade-arrow">→</div>
         <div class="cascade-step" data-step="2">
-          <div class="cascade-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></div>
+          <div class="cascade-icon"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="transform: translateY(2px);"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></div>
           <p>"Wait, this sounds amazing! What <em>is</em> a coronal mass ejection?"</p>
         </div>
         <div class="cascade-arrow">→</div>
         <div class="cascade-step" data-step="3">
-          <div class="cascade-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21l6-5 6 5"/><path d="M12 16V9"/><circle cx="12" cy="5" r="2"/><path d="M3 7l4-2 5 3"/><path d="M21 7l-4-2-5 3"/></svg></div>
+          <div class="cascade-icon">
+            <svg class="cascade-icon-img telescope-flip" viewBox="0 0 24 24" aria-label="Telescope icon"><path fill="currentColor" d="m21.9 8.9l-1.7 1l-4-6.9l1.7-1zm-12.1-1l3 5.2l6.1-3.5l-3-5.2zm1.6 4.8l-2-3.5l-4.3 2.5l2 3.5zm-9.3 1.9l1 1.7l2.6-1.5l-1-1.7zm10-.6l-.3-.4l-4.3 2.5l.3.4c.2.3.5.6.8.8L7 22h2l1.4-4.3h.1L12 22h2l-1.9-5.6c.5-.7.5-1.6 0-2.4"/></svg>
+          </div>
           <p>They discover heliophysics. They join a citizen science project. They contribute to a published paper.</p>
         </div>
       </div>
@@ -74,12 +76,13 @@
       <div class="edu-center">
         <div class="section-label">Goal 1</div>
         <h2 class="edu-title">Education & Communication</h2>
-        <p class="edu-body">Immersive audification-infused experiences inside planetarium domes and classrooms. Multi-channel spatial audio powered by OpenSpace software, where audiences don't just see the cosmos. They hear it.</p>
+        <p class="edu-body">Immersive <span class="contact-accent-word" style="color: var(--accent);">audification-infused</span> experiences inside planetarium domes and classrooms. Multi-channel audio spatialized in OpenSpace software. Audiences don't just see the cosmos. They hear it.</p>
       </div>
       <div class="edu-hero-image">
         <img src="images/EYU_2025_Alexander_HEARTS_3.jpeg" alt="SONARA team presenting audified heliophysics data to students at CU Boulder" loading="lazy">
       </div>
-      <div class="partners-grid" style="margin-top: 2rem; display: flex; flex-wrap: wrap; justify-content: center; gap: 0.8rem;">
+      <div class="partners-grid" style="margin-top: 1rem;">
+        <!--
         <div class="partner-logo"><span>CU Boulder</span></div>
         <div class="partner-logo"><span>Virginia Tech</span></div>
         <div class="partner-logo"><span>Michigan State</span></div>
@@ -89,6 +92,16 @@
         <div class="partner-logo"><span>UCLA</span></div>
         <div class="partner-logo"><span>U of Iowa</span></div>
         <div class="partner-logo"><span>SSI</span></div>
+        -->
+        <div class="partner-logo"><img class="logo-cu-boulder" src="logos/cu-boulder-new.avif" alt="University of Colorado Boulder logo" loading="lazy"></div>
+        <div class="partner-logo"><img src="logos/space%20science%20institute.png" alt="Space Science Institute logo" loading="lazy"></div>
+        <div class="partner-logo"><img class="logo-iowa" src="logos/Block%20IOWA-gold%20on%20white@2x_0.png" alt="University of Iowa logo" loading="lazy"></div>
+        <div class="partner-logo"><img src="logos/NEW_Harvard_Smithsonia.jpg" alt="Harvard-Smithsonian Center for Astrophysics logo" loading="lazy"></div>
+        <div class="partner-logo"><img src="logos/1280px-Michigan_Wolverines_logo.svg.png" alt="University of Michigan logo" loading="lazy"></div>
+        <div class="partner-logo"><img src="logos/Michigan_State.webp" alt="Michigan State University logo" loading="lazy"></div>
+        <div class="partner-logo partner-logo-ucla"><img class="logo-ucla" src="logos/UCLA-Logo-700x394.png" alt="UCLA logo" loading="lazy"></div>
+        <div class="partner-logo"><img src="logos/Seal_of_the_University_of_California,_San_Diego.svg.png" alt="UC San Diego logo" loading="lazy"></div>
+        <div class="partner-logo"><img class="logo-vt" src="logos/Virginia_Tech_Hokies_logo.svg.png" alt="Virginia Tech logo" loading="lazy"></div>
       </div>
     </div>
   </section>
@@ -101,7 +114,8 @@
         <div class="section-label">Goal 2</div>
         <h2 class="cs-title">Citizen Science</h2>
         <p class="cs-body">Volunteers listen to audified NASA satellite data and identify wave features that matter to real heliophysics research. No prior expertise required. Just ears, curiosity, and a few minutes.</p>
-        <p class="cs-body">Through our study builder platform, researchers design listening experiments. Volunteers contribute classifications. The data feeds directly into peer-reviewed science.</p>
+        <p class="cs-body">Through our study builder platform, researchers design listening experiments. Volunteers contribute classifications. The data feeds directly into peer-reviewed science. Check out our <a class="contact-accent-word" style="color: var(--accent);" href="https://spaceweather.now.audio/" target="_blank" rel="noopener noreferrer">spaceweather.now.audio</a> platform.</p>
+        <p class="cs-body cs-kicker"><strong><span style="color: var(--accent);">1,900+</span> volunteers. <span style="color: var(--accent);">30,000+</span> features classified.<br>And counting.</strong></p>
         <button class="sound-trigger cs-listen" data-target="citizen-science" aria-label="Hear a discovery">
           <span class="sound-icon"></span>
           <span>Hear a discovery</span>
@@ -110,7 +124,7 @@
       <div class="cs-right">
         <a href="https://spaceweather.now.audio/" target="_blank">
           <img src="images/spaceweather-now-audio.jpg" alt="Space Weather Now Audio" loading="lazy">
-          <span class="cs-image-caption">spaceweather.now.audio</span>
+          <span class="cs-image-caption">Visit spaceweather.now.audio</span>
         </a>
       </div>
     </div>
@@ -136,7 +150,7 @@
           <div class="instrument-visual sequencer-visual">
             <div class="seq-grid" id="seq-grid"></div>
           </div>
-          <h3>SONARA Sequencer <span class="demo-tag">(Demo)</span></h3>
+          <h3><span class="contact-accent-word" style="color: var(--accent);">SONARA</span> Sequencer <span class="demo-tag">(Demo)</span></h3>
           <p>Web-based rhythmic pattern builder using audified heliophysics data as source material.</p>
         </div>
         <div class="instrument-card">
@@ -154,7 +168,7 @@
             </div>
             <canvas id="synth-wave-canvas"></canvas>
           </div>
-          <h3>SONARA Synth <span class="demo-tag">(Demo)</span></h3>
+          <h3><span class="contact-accent-word" style="color: var(--accent);">SONARA</span> Synth <span class="demo-tag">(Demo)</span></h3>
           <p>A wavetable synthesizer that loads audified satellite data as oscillator sources. Play the magnetosphere.</p>
         </div>
         <div class="instrument-card">
@@ -259,11 +273,11 @@
     <div class="contact-content">
       <div class="section-label">Get Involved</div>
       <h2 class="contact-title">Workshops & Collaboration</h2>
-      <p class="contact-body">SONARA hosts workshops at partner institutions and music community organizations, connecting artists directly with heliophysics scientists for mentorship and co-creation. Whether you're a musician, educator, researcher, or student — there's a place for you in this project.</p>
+      <p class="contact-body"><span class="contact-accent-word" style="color: var(--accent);">SONARA</span> hosts workshops at partner institutions and music community organizations, connecting artists directly with heliophysics scientists for mentorship and co-creation. Whether you're a musician, educator, researcher, or student — there's a place for you in this project.</p>
       <div class="contact-offerings">
         <div class="contact-card">
           <h3>Workshops</h3>
-          <p>In-person and virtual sessions at partner universities. Learn to build with NASA data, produce space-sound compositions, and develop signal processing skills alongside SONARA scientists.</p>
+          <p>In-person and virtual sessions at partner universities. Learn to build with NASA data, produce space-sound compositions, and develop signal processing skills alongside <span class="contact-accent-word" style="color: var(--accent);">SONARA</span> scientists.</p>
         </div>
         <div class="contact-card">
           <h3>Monthly Gatherings</h3>
@@ -284,9 +298,9 @@
     </div>
   </section>
 
-  <script src="js/rays.js?v=7"></script>
-  <script type="module" src="js/audio.js?v=7"></script>
-  <script type="module" src="js/visuals.js?v=7"></script>
-  <script type="module" src="js/main.js?v=7"></script>
+  <script src="js/rays.js?v=8"></script>
+  <script type="module" src="js/audio.js?v=8"></script>
+  <script type="module" src="js/visuals.js?v=8"></script>
+  <script type="module" src="js/main.js?v=8"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@ let ctx = null;
 const activeNodes = {};
 let stemAnalyser = null;
 let heroAnalyser = null;
+let citizenAnalyser = null;
 const bufferCache = {};
 
 // Two-phase loading: fetch raw bytes immediately (no AudioContext needed),
@@ -667,6 +668,12 @@ export async function play(id) {
     heroAnalyser.fftSize = 256;
     master.connect(heroAnalyser);
   }
+  // Attach analyser for citizen-science waveform reactivity
+  if (id === 'citizen-science') {
+    citizenAnalyser = ac.createAnalyser();
+    citizenAnalyser.fftSize = 256;
+    master.connect(citizenAnalyser);
+  }
   activeNodes[id] = { ...result, master };
   return result.duration || true;
 }
@@ -689,6 +696,7 @@ export function stop(id) {
     if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
   }
   if (id === 'hero') heroAnalyser = null;
+  if (id === 'citizen-science') citizenAnalyser = null;
 
   try {
     const ac = getContext();
@@ -736,6 +744,7 @@ export function killNow(id) {
     if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
   }
   if (id === 'hero') heroAnalyser = null;
+  if (id === 'citizen-science') citizenAnalyser = null;
   nodes.forEach(n => { try { n.stop(); } catch(e) {} });
   try { master.disconnect(); } catch(e) {}
 }
@@ -748,12 +757,39 @@ export function now() {
   return ctx ? ctx.currentTime : 0;
 }
 
+// Stop sequencer: kill new notes + visual, let reverb/delay ring, then full cleanup
+export function seqSilence() {
+  if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
+  stemAnalyser = null; // kill waveform visual immediately
+  // Delayed full teardown — gives reverb/delay ~4s to ring out
+  const entry = activeNodes['stem-music'];
+  if (entry) {
+    delete activeNodes['stem-music'];
+    seqRevG = null;
+    seqConv = null;
+    seqSynthBus = null;
+    seqDelayNode = null;
+    seqDelayFeedback = null;
+    seqDelayGain = null;
+    setTimeout(() => {
+      try {
+        entry.nodes.forEach(n => { try { n.stop(); } catch(e) {} });
+        entry.master.disconnect();
+      } catch(e) {}
+    }, 4000);
+  }
+}
+
 export function getStemAnalyser() {
   return stemAnalyser;
 }
 
 export function getHeroAnalyser() {
   return heroAnalyser;
+}
+
+export function getCitizenAnalyser() {
+  return citizenAnalyser;
 }
 
 export function getStemPattern() {

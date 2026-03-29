@@ -3,7 +3,12 @@
  * Hero particle field, citizen science waveform, dome starfield, synth wave.
  */
 
-import { getStemAnalyser, getHeroAnalyser } from './audio.js?v=7';
+import * as audio from './audio.js?v=8';
+const getStemAnalyser = audio.getStemAnalyser;
+const getHeroAnalyser = audio.getHeroAnalyser;
+const getCitizenAnalyser = typeof audio.getCitizenAnalyser === 'function'
+  ? audio.getCitizenAnalyser
+  : () => null;
 
 let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
 document.addEventListener('mousemove', (e) => {
@@ -39,6 +44,7 @@ function initHeroCanvas() {
   let particles = [];
   let time = 0;
   let lineIntensity = 0; // slow-smoothed audio for connection brightness
+  const HERO_PARTICLE_BRIGHTNESS = 1.15; // subtle global lift
   const heroVis = trackVisibility('hero');
 
   // Debug particle counter (localhost only, hero only)
@@ -48,6 +54,13 @@ function initHeroCanvas() {
   canvas.parentElement.appendChild(counterEl);
   let heroAudioPlaying = false;
   let audioIntensity = 0;
+  let audioTransient = 0; // faster, less-smoothed RMS component for micro-tremble
+  let mouseSwirlMix = 1; // 1 = full mouse swirl, 0 = disabled
+  let wasPlayingLastFrame = false;
+  let playStartTime = 0;
+  let stopTime = 0;
+  const MOUSE_SWIRL_FADE_MS = 5000;
+  const MOUSE_SWIRL_RETURN_MS = 1000;
   const heroRmsData = new Uint8Array(128);
   let rmsSmooth = 0;
   let lastRippleTime = 0;
@@ -59,6 +72,11 @@ function initHeroCanvas() {
     if (!listenBtn) return;
     const ring = document.createElement('span');
     ring.className = 'listen-ring';
+    const rippleAge = rippleClickTime > 0 ? performance.now() - rippleClickTime : 0;
+    const decay = rippleClickTime > 0
+      ? Math.max(0, 1 - rippleAge / RIPPLE_BURST_DURATION)
+      : 1;
+    ring.style.setProperty('--ripple-peak-opacity', (decay * 0.24).toFixed(4));
     const dur = 4 + Math.random() * 3; // 4–7s, variable
     ring.style.animation = `ripple ${dur}s ease-out forwards`;
     listenBtn.appendChild(ring);
@@ -238,6 +256,21 @@ function initHeroCanvas() {
   function draw() {
     if (!heroVis.visible) { requestAnimationFrame(draw); return; }
     time += 0.005;
+    const now = performance.now();
+
+    const isPlaying = !!(listenBtn && listenBtn.classList.contains('playing'));
+    if (isPlaying && !wasPlayingLastFrame) playStartTime = now;
+    if (!isPlaying && wasPlayingLastFrame) stopTime = now;
+    wasPlayingLastFrame = isPlaying;
+
+    // Fade mouse swirl down over 5s while playback starts; recover quickly when stopped.
+    if (isPlaying) {
+      const t = Math.min(1, (now - playStartTime) / MOUSE_SWIRL_FADE_MS);
+      mouseSwirlMix = 1 - t;
+    } else {
+      const t = Math.min(1, (now - stopTime) / MOUSE_SWIRL_RETURN_MS);
+      mouseSwirlMix = t;
+    }
 
     // --- Audio RMS ---
     const heroAn = getHeroAnalyser();
@@ -250,10 +283,12 @@ function initHeroCanvas() {
       }
       const rms = Math.sqrt(sum / heroRmsData.length);
       const target = Math.min(1, rms * 10);
+      const transientTarget = Math.min(1, rms * 16);
       const rate = target > audioIntensity ? 0.25 : 0.06;
       audioIntensity += (target - audioIntensity) * rate;
+      // Keep this channel intentionally faster/rougher than audioIntensity.
+      audioTransient += (transientTarget - audioTransient) * 0.45;
       rmsSmooth += (target - rmsSmooth) * 0.008;
-      const now = performance.now();
       // Ripples: triggered by click, fade out over 10s, then stop
       const rippleAge = now - rippleClickTime;
       if (rippleClickTime > 0 && rippleAge < RIPPLE_BURST_DURATION) {
@@ -267,12 +302,13 @@ function initHeroCanvas() {
       }
     } else {
       audioIntensity += (0 - audioIntensity) * 0.02;
+      audioTransient += (0 - audioTransient) * 0.18;
       rmsSmooth = 0;
     }
 
-    // Record current intensity into ring buffer for ripple delay
+    // Keep particle ripple field fully driven by audio again.
     rippleHead = (rippleHead + 1) % RIPPLE_BUF_LEN;
-    rippleBuf[rippleHead] = audioIntensity;
+    rippleBuf[rippleHead] = Math.min(1, audioIntensity * 0.68 + audioTransient * 0.68);
 
     // --- Particle lifecycle ---
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -335,7 +371,13 @@ function initHeroCanvas() {
     // Smooth line brightness separately — much slower than audioIntensity
     lineIntensity += (audioIntensity - lineIntensity) * 0.015;
     const aiBrightBoost = 1 + lineIntensity * 2;
-    const lineAlphas = [0.06 * aiBrightBoost, 0.048 * aiBrightBoost, 0.036 * aiBrightBoost, 0.024 * aiBrightBoost, 0.012 * aiBrightBoost];
+    const lineAlphas = [
+      0.06 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
+      0.048 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
+      0.036 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
+      0.024 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
+      0.012 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS
+    ];
 
     // --- Find candidate connections this frame ---
     const framePairs = new Set(); // track which pairs are active this frame
@@ -446,7 +488,8 @@ function initHeroCanvas() {
       const distFromBtn = Math.sqrt(dxB * dxB + dyB * dyB);
       const localIntensity = getDelayedIntensity(distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
       const audioBoost = localIntensity * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
-      const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
+      const tremble = (Math.random() - 0.5) * 0.12 * localIntensity * react;
+      const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * HERO_PARTICLE_BRIGHTNESS);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
 
       // Fill GPU buffer — pointSize = currentR * 6 (core is inner 1/3, glow is outer 2/3)
@@ -484,15 +527,15 @@ function initHeroCanvas() {
         }
       }
 
-      // Mouse attraction (disabled during playback)
-      if (!listenBtn || !listenBtn.classList.contains('playing')) {
+      // Mouse attraction/swirl with time-based fade during playback
+      if (mouseSwirlMix > 0.001) {
         const dmx = mx - p.x, dmy = my - p.y;
         const d2 = dmx * dmx + dmy * dmy;
-        if (d2 < 122500) {
+        if (d2 < 211600) {
           const mdist = Math.sqrt(d2);
-          const proximity = 1 - mdist / 350;
-          const force = proximity * 0.00012;
-          const swirl = proximity * 0.00015;
+          const proximity = 1 - mdist / 460;
+          const force = proximity * 0.00008 * mouseSwirlMix;
+          const swirl = proximity * 0.00008 * mouseSwirlMix;
           p.vx += dmx * force + dmy * swirl;
           p.vy += dmy * force + (-dmx) * swirl;
         }
@@ -539,7 +582,7 @@ function initHeroCanvas() {
     if (activeCount > 0) {
       gl.useProgram(particleProg);
       gl.uniform2f(pLoc.resolution, w, h);
-      gl.uniform1f(pLoc.glowAlpha, 0.06 + audioIntensity * 0.08);
+      gl.uniform1f(pLoc.glowAlpha, (0.06 + audioIntensity * 0.08) * HERO_PARTICLE_BRIGHTNESS);
       gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, particleData.subarray(0, activeCount * PFLOATS));
       gl.enableVertexAttribArray(pLoc.position);
@@ -746,6 +789,7 @@ function initVisionCanvas() {
   let w, h;
   let time = 5 + Math.random() * 10; // start mid-animation
   const vis = trackVisibility('vision');
+  const ORB_MOTION_MULT = 0.75; // Slightly slower overall orb motion
 
   const ORB_COUNT = 55;
   let orbs = [];
@@ -776,14 +820,14 @@ function initVisionCanvas() {
         y: py,
         baseRadius: 80 + depth * 180,
         depth,
-        driftX: (Math.random() - 0.5) * 0.2 * (0.3 + depth * 0.7),
-        driftY: (Math.random() - 0.5) * 0.15 * (0.3 + depth * 0.7),
+        driftX: (Math.random() - 0.5) * 0.2 * (0.3 + depth * 0.7) * ORB_MOTION_MULT,
+        driftY: (Math.random() - 0.5) * 0.15 * (0.3 + depth * 0.7) * ORB_MOTION_MULT,
         wanderPhaseX: Math.random() * Math.PI * 2,
         wanderPhaseY: Math.random() * Math.PI * 2,
-        wanderSpeed: 0.1 + Math.random() * 0.15,
+        wanderSpeed: (0.1 + Math.random() * 0.15) * ORB_MOTION_MULT,
         wanderAmp: 5 + depth * 10,
         phase: Math.random() * Math.PI * 2,
-        breatheSpeed: 0.15 + Math.random() * 0.3,
+        breatheSpeed: (0.15 + Math.random() * 0.3) * ORB_MOTION_MULT,
         life: Math.random() * Math.PI * 2, // start at random point in lifecycle
         lifeSpeed: 0.0004 + Math.random() * 0.003, // 2x slower than original
         hue: Math.random() < 0.6
@@ -803,7 +847,7 @@ function initVisionCanvas() {
   function draw() {
     if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
-    time += 0.003;
+    time += 0.003 * ORB_MOTION_MULT;
 
     // Convert global mouse to canvas-local coords
     const rect = canvas.getBoundingClientRect();
@@ -865,7 +909,13 @@ function initCSCanvas() {
   if (!canvas) return;
   const c = canvas.getContext('2d');
   let w, h;
-  let time = 5 + Math.random() * 10;
+  let waveTime = 5 + Math.random() * 10;
+  let orbTime = 5 + Math.random() * 10;
+  const baseSpeed = 0.0042;
+  let csSpeedBoost = 0;
+  const csRmsData = new Uint8Array(128);
+  const CS_SPEED_MULT_MAX = 52; // louder moments should rip much faster
+  const CS_FREQ_MULT = 1.75; // stable higher-frequency waveform shape
   const vis = trackVisibility('citizen-science');
 
   // Living discovery orbs — drift, fade in/out, respawn
@@ -896,7 +946,26 @@ function initCSCanvas() {
   function draw() {
     if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
-    time += 0.0053;
+
+    // Drive waveform speed from live audio amplitude for "Hear a discovery".
+    const csAn = getCitizenAnalyser();
+    if (csAn) {
+      csAn.getByteTimeDomainData(csRmsData);
+      let sum = 0;
+      for (let i = 0; i < csRmsData.length; i++) {
+        const v = (csRmsData[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / csRmsData.length);
+      const targetBoost = Math.min(1, rms * 60);
+      const rate = targetBoost > csSpeedBoost ? 0.38 : 0.09;
+      csSpeedBoost += (targetBoost - csSpeedBoost) * rate;
+    } else {
+      csSpeedBoost += (0 - csSpeedBoost) * 0.08;
+    }
+    const speedMult = 1 + csSpeedBoost * CS_SPEED_MULT_MAX;
+    waveTime += baseSpeed * speedMult;
+    orbTime += baseSpeed;
 
     const centerY = h / 2;
     const amplitude = h * 0.15;
@@ -908,9 +977,9 @@ function initCSCanvas() {
     for (let x = 0; x < w; x++) {
       const t = x / w;
       const y = centerY +
-        Math.sin(t * 12 + time) * amplitude * 0.6 +
-        Math.sin(t * 5.3 + time * 0.7) * amplitude * 0.3 +
-        Math.sin(t * 20 + time * 1.5) * amplitude * 0.1;
+        Math.sin(t * 12 * CS_FREQ_MULT + waveTime) * amplitude * 0.6 +
+        Math.sin(t * 5.3 * CS_FREQ_MULT + waveTime * 0.7) * amplitude * 0.3 +
+        Math.sin(t * 20 * CS_FREQ_MULT + waveTime * 1.5) * amplitude * 0.1;
       if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
     }
     c.stroke();
@@ -922,8 +991,8 @@ function initCSCanvas() {
     for (let x = 0; x < w; x++) {
       const t = x / w;
       const y = centerY +
-        Math.sin(t * 8 + time * 0.5 + 1) * amplitude * 0.5 +
-        Math.sin(t * 15 + time * 1.2) * amplitude * 0.15;
+        Math.sin(t * 8 * CS_FREQ_MULT + waveTime * 0.5 + 1) * amplitude * 0.5 +
+        Math.sin(t * 15 * CS_FREQ_MULT + waveTime * 1.2) * amplitude * 0.15;
       if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
     }
     c.stroke();
@@ -949,7 +1018,7 @@ function initCSCanvas() {
 
       const px = d.x * w;
       const py = d.y * h;
-      const pulse = Math.sin(time * d.freq + d.phase) * 0.5 + 0.5;
+      const pulse = Math.sin(orbTime * d.freq + d.phase) * 0.5 + 0.5;
       const radius = 3 + pulse * 6;
       const alpha = (0.25 + pulse * 0.3) * envelope;
 
@@ -1000,8 +1069,19 @@ function initEduCanvas() {
   let w, h;
   let time = 5 + Math.random() * 10;
   const vis = trackVisibility('education');
-  const STARS = 200;
+  const STARS = 300;
   let stars = [];
+  const AUTO_EMITTER_SPEED = 0.33; // ~1/3 of click-spawn particle rise speed
+  const AUTO_WANDER_SPEED = 0.42;  // subtler meandering draw path
+  let autoSpawnAccum = 0;
+  const autoEmitter = {
+    phaseX1: Math.random() * Math.PI * 2,
+    phaseX2: Math.random() * Math.PI * 2,
+    phaseX3: Math.random() * Math.PI * 2,
+    phaseY1: Math.random() * Math.PI * 2,
+    phaseY2: Math.random() * Math.PI * 2,
+    phaseY3: Math.random() * Math.PI * 2,
+  };
 
   function resize() {
     w = canvas.width = canvas.offsetWidth;
@@ -1015,9 +1095,33 @@ function initEduCanvas() {
       stars.push({
         x: Math.random() * w,
         y: Math.random() * h,
-        r: Math.random() * 1.5 + 0.3,
-        alpha: Math.random() * 0.5 + 0.1,
+        r: Math.random() * 1.6 + 0.35,
+        alpha: Math.random() * 0.55 + 0.18,
         speed: Math.random() * 0.2 + 0.05,
+        twinkleSpeed: 0.5 + Math.random() * 2,
+        twinklePhase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  function spawnStarsAt(cx, cy, opts = {}) {
+    if (stars.length > 5000) return;
+    const count = opts.count ?? 1;
+    const spread = opts.spread ?? 24;
+    const speedMul = opts.speedMul ?? 1;
+    const auto = opts.auto ?? false;
+    for (let i = 0; i < count; i++) {
+      stars.push({
+        x: cx + (Math.random() - 0.5) * spread,
+        y: cy + (Math.random() - 0.5) * spread,
+        r: Math.random() * 1.7 + 0.35,
+        alpha: 0,
+        targetAlpha: auto
+          ? 0.18 + Math.random() * 0.16
+          : 0.36 + Math.random() * 0.28,
+        age: 0,
+        fadeIn: 60 + Math.floor(Math.random() * 60),
+        speed: (Math.random() * 0.2 + 0.05) * speedMul,
         twinkleSpeed: 0.5 + Math.random() * 2,
         twinklePhase: Math.random() * Math.PI * 2
       });
@@ -1055,7 +1159,7 @@ function initEduCanvas() {
       const twinkle = Math.sin(time * s.twinkleSpeed + s.twinklePhase) * 0.5 + 0.5;
       const a = s.alpha * (0.3 + twinkle * 0.7);
 
-      c.fillStyle = `rgba(200, 210, 230, ${a})`;
+      c.fillStyle = `rgba(215, 222, 238, ${Math.min(1, a * 1.18)})`;
       c.beginPath();
       c.arc(s.x, s.y, s.r, 0, Math.PI * 2);
       c.fill();
@@ -1074,6 +1178,28 @@ function initEduCanvas() {
       }
     }
 
+    // Autonomous emitter: layered sinusoids in X/Y create a complex meandering signal path.
+    const ex =
+      w * 0.5 +
+      Math.sin(time * (0.27 * AUTO_WANDER_SPEED) + autoEmitter.phaseX1) * w * 0.14 +
+      Math.sin(time * (0.11 * AUTO_WANDER_SPEED) + autoEmitter.phaseX2) * w * 0.07 +
+      Math.sin(time * (0.56 * AUTO_WANDER_SPEED) + autoEmitter.phaseX3) * w * 0.025;
+    const ey =
+      h * 0.58 +
+      Math.sin(time * (0.19 * AUTO_WANDER_SPEED) + autoEmitter.phaseY1) * h * 0.12 +
+      Math.sin(time * (0.33 * AUTO_WANDER_SPEED) + autoEmitter.phaseY2) * h * 0.06 +
+      Math.sin(time * (0.71 * AUTO_WANDER_SPEED) + autoEmitter.phaseY3) * h * 0.022;
+    const emitX = Math.max(24, Math.min(w - 24, ex));
+    const emitY = Math.max(24, Math.min(h - 24, ey));
+
+    // Spawn at a gentle continuous cadence, slower than manual click-spawn behavior.
+    autoSpawnAccum += 0.11;
+    while (autoSpawnAccum >= 1) {
+      autoSpawnAccum -= 1;
+      const spawnCount = Math.random() < 0.08 ? 2 : 1;
+      spawnStarsAt(emitX, emitY, { count: spawnCount, spread: 24, speedMul: AUTO_EMITTER_SPEED, auto: true });
+    }
+
     requestAnimationFrame(draw);
   }
 
@@ -1082,24 +1208,11 @@ function initEduCanvas() {
   const domeEl = document.getElementById('education');
 
   function spawnStars(e) {
-    if (stars.length > 5000) return;
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
-    const count = domeDragging ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 4);
-    for (let i = 0; i < count; i++) {
-      stars.push({
-        x: cx + (Math.random() - 0.5) * 40,
-        y: cy + (Math.random() - 0.5) * 40,
-        r: Math.random() * 1.5 + 0.3,
-        alpha: 0,
-        targetAlpha: 0.3 + Math.random() * 0.3,
-        age: 0, fadeIn: 60 + Math.floor(Math.random() * 60),
-        speed: Math.random() * 0.2 + 0.05,
-        twinkleSpeed: 0.5 + Math.random() * 2,
-        twinklePhase: Math.random() * Math.PI * 2
-      });
-    }
+    const count = domeDragging ? 2 + Math.floor(Math.random() * 2) : 5 + Math.floor(Math.random() * 4);
+    spawnStarsAt(cx, cy, { count, spread: 40, speedMul: 1 });
   }
 
   domeEl.addEventListener('mousedown', (e) => { domeDragging = true; spawnStars(e); });
@@ -1132,7 +1245,7 @@ function initSynthWave() {
   function draw() {
     if (!vis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
-    time += 0.011;
+    time += 0.00616;
 
     const centerY = h * 0.6;
     const amp = h * 0.42;
@@ -1247,11 +1360,12 @@ function initSpectrumCanvas() {
   function draw() {
     if (!vis2.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
-    time += 0.0008;
+    const stemPlaying = !!getStemAnalyser();
+    time += stemPlaying ? 0.0008 : 0.0004;
 
     const barWidth = w / BAR_COUNT;
     const maxHeight = h * 0.45;
-    const centerY = h * 0.65;
+    const centerY = h * 0.71;
 
     // Live EQ FFT feed — commented out, one layer too much
     // const analyser = getStemAnalyser();
@@ -1527,11 +1641,19 @@ function initGlobeCanvas() {
       c.stroke();
     }
 
-    // Randomly toggle active dots
+    // Randomly toggle active dots — but not if a packet is in flight to/from them
     if (Math.random() < 0.02) {
       const idx = Math.floor(Math.random() * points.length);
-      points[idx].active = !points[idx].active;
-      points[idx].pulse = Math.random() * Math.PI * 2;
+      const pt = points[idx];
+      const busy = packets.some(pkt => {
+        const f = pkt.from, t = pkt.to;
+        return (Math.abs(f.x - pt.x) < 0.001 && Math.abs(f.y - pt.y) < 0.001 && Math.abs(f.z - pt.z) < 0.001)
+            || (Math.abs(t.x - pt.x) < 0.001 && Math.abs(t.y - pt.y) < 0.001 && Math.abs(t.z - pt.z) < 0.001);
+      });
+      if (!busy) {
+        pt.active = !pt.active;
+        pt.pulse = Math.random() * Math.PI * 2;
+      }
     }
 
     // Spawn data packets between active nodes
@@ -1559,11 +1681,28 @@ function initGlobeCanvas() {
 
     // Update packets
     for (let i = packets.length - 1; i >= 0; i--) {
-      packets[i].t += packets[i].speed;
-      if (packets[i].t >= 1) {
-        // Ripple on arrival
-        ripples.push({ x: packets[i].to.x, y: packets[i].to.y, z: packets[i].to.z, age: 0 });
-        packets.splice(i, 1);
+      const pkt = packets[i];
+      if (pkt.arrived) {
+        // Hold phase then fade
+        if (pkt.hold > 0) {
+          pkt.hold--;
+        } else if (pkt.fadeRate > 0) {
+          pkt.fade -= pkt.fadeRate;
+          if (pkt.fade <= 0) { packets.splice(i, 1); }
+        }
+      } else {
+        pkt.t += pkt.speed;
+        if (pkt.t >= 1) {
+          pkt.t = 1;
+          pkt.arrived = true;
+          pkt.fade = 1;
+          pkt.hold = 120 + Math.floor(Math.random() * 120); // 2-4s hold
+          // 30% chance to persist, rest fade at varied rates
+          const r = Math.random();
+          pkt.fadeRate = r < 0.3 ? 0 : 0.001 + r * r * 0.011;
+          // Ripple on arrival
+          ripples.push({ x: pkt.to.x, y: pkt.to.y, z: pkt.to.z, age: 0 });
+        }
       }
     }
 
@@ -1613,25 +1752,28 @@ function initGlobeCanvas() {
         if (!drawing) { c.moveTo(p.sx, p.sy); drawing = true; }
         else c.lineTo(p.sx, p.sy);
       }
-      const arcAlpha = Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1) * 0.25;
+      const fadeMul = pkt.arrived ? pkt.fade : 1;
+      const arcAlpha = Math.min(pkt.t * 5, 1) * 0.25 * fadeMul;
       c.strokeStyle = `rgba(212, 168, 67, ${arcAlpha})`;
       c.lineWidth = 0.6;
       c.stroke();
 
-      // Traveling dot
-      const ta = Math.sin((1 - pkt.t) * omega) / sinO;
-      const tb = Math.sin(pkt.t * omega) / sinO;
-      const tp = project(
-        pkt.from.x * ta + pkt.to.x * tb,
-        pkt.from.y * ta + pkt.to.y * tb,
-        pkt.from.z * ta + pkt.to.z * tb
-      );
-      if (tp.z > 0) {
-        const dotAlpha = tp.z * 0.7 * Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1);
-        c.fillStyle = `rgba(212, 168, 67, ${dotAlpha})`;
-        c.beginPath();
-        c.arc(tp.sx, tp.sy, 2, 0, Math.PI * 2);
-        c.fill();
+      // Traveling dot (only while in transit)
+      if (!pkt.arrived) {
+        const ta = Math.sin((1 - pkt.t) * omega) / sinO;
+        const tb = Math.sin(pkt.t * omega) / sinO;
+        const tp = project(
+          pkt.from.x * ta + pkt.to.x * tb,
+          pkt.from.y * ta + pkt.to.y * tb,
+          pkt.from.z * ta + pkt.to.z * tb
+        );
+        if (tp.z > 0) {
+          const dotAlpha = tp.z * 0.7 * Math.min(pkt.t * 5, 1) * Math.min((1 - pkt.t) * 5, 1);
+          c.fillStyle = `rgba(212, 168, 67, ${dotAlpha})`;
+          c.beginPath();
+          c.arc(tp.sx, tp.sy, 2, 0, Math.PI * 2);
+          c.fill();
+        }
       }
     }
 

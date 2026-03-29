@@ -3,11 +3,50 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, killNow, seqRestart, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb } from './audio.js?v=7';
-import { initVisuals } from './visuals.js?v=7';
+import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb } from './audio.js?v=8';
+import { initVisuals } from './visuals.js?v=8';
 
 (function() {
   'use strict';
+
+  let pointerFocusLock = null;
+
+  function restoreScrollPosition(x, y) {
+    const root = document.documentElement;
+    const prevBehavior = root.style.scrollBehavior;
+    root.style.scrollBehavior = 'auto';
+    window.scrollTo(x, y);
+    requestAnimationFrame(() => {
+      root.style.scrollBehavior = prevBehavior || 'smooth';
+    });
+  }
+
+  document.addEventListener('mousedown', (e) => {
+    const control = e.target && e.target.closest
+      ? e.target.closest('button, a, input, select, textarea, [tabindex]')
+      : null;
+    if (!control || e.button !== 0) return;
+    pointerFocusLock = {
+      el: control,
+      x: window.scrollX,
+      y: window.scrollY,
+      ts: performance.now(),
+    };
+  }, true);
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (
+      pointerFocusLock &&
+      t === pointerFocusLock.el &&
+      performance.now() - pointerFocusLock.ts < 400
+    ) {
+      const { x, y } = pointerFocusLock;
+      requestAnimationFrame(() => {
+        restoreScrollPosition(x, y);
+      });
+      pointerFocusLock = null;
+    }
+  });
 
   // Enable smooth scrolling after initial load so reload doesn't animate to restored position
   requestAnimationFrame(() => {
@@ -39,15 +78,59 @@ import { initVisuals } from './visuals.js?v=7';
   // ===== Sections + Dot Nav =====
   const allSections = Array.from(document.querySelectorAll('.section')).filter(s => getComputedStyle(s).display !== 'none');
   const sectionNames = ['SONARA', 'The Vision', 'Education & Communication', 'Citizen Science', 'STEM + Music', 'Get Involved'];
+  const preloadTimers = new WeakMap();
+
+  function scheduleNeighborPreload(section, idx) {
+    const nextSection = allSections[idx + 1];
+    if (!nextSection || preloadTimers.has(section)) return;
+
+    const timer = setTimeout(() => {
+      preloadTimers.delete(section);
+      if (!section.classList.contains('in-view')) return;
+      nextSection.querySelectorAll('img[loading="lazy"]').forEach(img => {
+        img.loading = 'eager';
+      });
+    }, 450);
+
+    preloadTimers.set(section, timer);
+  }
+
+  function cancelNeighborPreload(section) {
+    if (!preloadTimers.has(section)) return;
+    clearTimeout(preloadTimers.get(section));
+    preloadTimers.delete(section);
+  }
+
+  let lastScrollY = window.scrollY;
 
   const dotNav = document.createElement('nav');
   dotNav.className = 'dot-nav';
   dotNav.setAttribute('aria-label', 'Section navigation');
 
+  function getClosestSectionIdx() {
+    const viewportMid = window.innerHeight * 0.5;
+    let activeIdx = 0;
+    let bestDistance = Infinity;
+
+    allSections.forEach((section, i) => {
+      const rect = section.getBoundingClientRect();
+      const sectionMid = rect.top + rect.height * 0.5;
+      const distance = Math.abs(sectionMid - viewportMid);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        activeIdx = i;
+      }
+    });
+
+    return activeIdx;
+  }
+
+  const initialActiveIdx = getClosestSectionIdx();
+
   allSections.forEach((section, i) => {
     const dot = document.createElement('button');
     dot.setAttribute('aria-label', sectionNames[i] || section.id);
-    if (i === 0) dot.classList.add('active');
+    dot.classList.toggle('active', i === initialActiveIdx);
 
     const tooltip = document.createElement('span');
     tooltip.className = 'dot-tooltip';
@@ -61,6 +144,16 @@ import { initVisuals } from './visuals.js?v=7';
   });
   document.body.appendChild(dotNav);
 
+  function updateActiveDotFromScroll() {
+    const activeIdx = getClosestSectionIdx();
+
+    dotNav.querySelectorAll('button').forEach((d, i) => {
+      d.classList.toggle('active', i === activeIdx);
+    });
+  }
+
+  updateActiveDotFromScroll();
+
   // ===== Intersection Observer =====
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
@@ -72,6 +165,8 @@ import { initVisuals } from './visuals.js?v=7';
           dotNav.querySelectorAll('button').forEach((d, i) => {
             d.classList.toggle('active', i === idx);
           });
+          // Let the current snap settle, then preload only the next section.
+          scheduleNeighborPreload(entry.target, idx);
         }
 
         // Trigger counter animation
@@ -85,17 +180,29 @@ import { initVisuals } from './visuals.js?v=7';
         } else {
           cursorGlow.style.opacity = '1';
         }
+
       } else {
         entry.target.classList.remove('in-view');
+        cancelNeighborPreload(entry.target);
 
         // Fade out sound when scrolling away from a section
         const sectionSound = entry.target.dataset?.sound;
         if (sectionSound) {
+          // Sequencer: stop notes + visual, reverb/delay ring out, delayed cleanup
+          if (entry.target.id === 'stem-music' && seqPlaying) {
+            seqSilence();
+            setPlayState(false);
+            lastPlayheadCol = -1;
+            seqCells.forEach(row => {
+              row.cells.forEach(cell => cell.classList.remove('playhead', 'lit'));
+            });
+          }
           const playingBtn = entry.target.querySelector('.sound-trigger.playing');
           if (playingBtn && !fadingButtons.has(playingBtn)) {
             fadeStop(playingBtn, getSoundId(playingBtn));
           }
         }
+
       }
     });
   }, { threshold: 0.4 });
@@ -191,12 +298,20 @@ import { initVisuals } from './visuals.js?v=7';
       const soundId = getSoundId(btn);
       if (!soundId) return;
       btn.classList.add('clicked');
-      // Show scroll hint on listen click, pulse after 10s
+      // Show scroll hint after 5s on first listen click, then pulse later
       if (btn.classList.contains('listen-btn')) {
         const hint = document.querySelector('.scroll-hint');
-        if (hint && !hint.classList.contains('visible')) {
-          hint.classList.add('visible');
-          setTimeout(() => hint.classList.add('pulsing'), 10000);
+        if (hint && hint.dataset.dismissed !== '1' && !hint.classList.contains('visible') && !hint.dataset.pendingReveal) {
+          hint.dataset.pendingReveal = '1';
+          setTimeout(() => {
+            if (hint.dataset.dismissed === '1') return;
+            hint.classList.add('visible');
+            delete hint.dataset.pendingReveal;
+            setTimeout(() => {
+              if (hint.dataset.dismissed === '1') return;
+              hint.classList.add('pulsing');
+            }, 3000);
+          }, 4500);
         }
       }
       if (fadingButtons.has(btn)) {
@@ -235,12 +350,156 @@ import { initVisuals } from './visuals.js?v=7';
     const hintObs = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
         if (!scrollHint.classList.contains('visible')) return;
-        scrollHint.style.opacity = entry.isIntersecting ? '' : '0';
+        if (scrollHint.dataset.dismissed === '1') return;
+        if (entry.isIntersecting) {
+          scrollHint.dataset.seenInHero = '1';
+          scrollHint.style.opacity = '';
+        } else {
+          // Ignore initial non-intersecting states until hint has actually been seen in hero.
+          if (scrollHint.dataset.seenInHero !== '1') return;
+          // One-time hint: once user leaves hero after seeing it, never show again.
+          scrollHint.style.opacity = '0';
+          scrollHint.classList.remove('pulsing');
+          scrollHint.dataset.dismissed = '1';
+          hintObs.disconnect();
+        }
       });
     }, { threshold: 0.8 });
     const hero = document.getElementById('hero');
     if (hero) hintObs.observe(hero);
   }
+
+  // ===== Section Down Cues =====
+  const cueEligibleSections = allSections.slice(1, -1);
+  const cueTimers = new Map();
+  const cueFadeRafs = new WeakMap();
+  const cueShown = new WeakSet();
+  let touchStartY = null;
+
+  function stopCueFadeParallax(section) {
+    if (!cueFadeRafs.has(section)) return;
+    cancelAnimationFrame(cueFadeRafs.get(section));
+    cueFadeRafs.delete(section);
+  }
+
+  function runCueFadeParallax(section) {
+    const cue = section.querySelector('.section-down-cue');
+    if (!cue) return;
+
+    stopCueFadeParallax(section);
+    const startScrollY = window.scrollY;
+    const fadeStart = performance.now();
+    const fadeMs = 250;
+
+    function tick() {
+      if (!section.classList.contains('cue-fading-out')) {
+        cue.style.setProperty('--cue-scroll-y', '0px');
+        cueFadeRafs.delete(section);
+        return;
+      }
+
+      const deltaY = (window.scrollY - startScrollY) * 0.5;
+      cue.style.setProperty('--cue-scroll-y', `${deltaY.toFixed(1)}px`);
+
+      if (performance.now() - fadeStart < fadeMs + 50) {
+        cueFadeRafs.set(section, requestAnimationFrame(tick));
+      } else {
+        cue.style.setProperty('--cue-scroll-y', '0px');
+        cueFadeRafs.delete(section);
+      }
+    }
+
+    cueFadeRafs.set(section, requestAnimationFrame(tick));
+  }
+
+  function startCueFade(direction = 'down') {
+    cueEligibleSections.forEach(section => {
+      if (!section.classList.contains('show-down-cue')) return;
+      section.classList.toggle('cue-page-tied', direction === 'up');
+      section.classList.add('cue-fading-out');
+      section.classList.remove('show-down-cue');
+      if (direction === 'down') {
+        runCueFadeParallax(section);
+      } else {
+        stopCueFadeParallax(section);
+        section.querySelector('.section-down-cue')?.style.setProperty('--cue-scroll-y', '0px');
+      }
+    });
+  }
+
+  cueEligibleSections.forEach(section => {
+    section.classList.add('has-down-cue');
+    if (!section.querySelector('.section-down-cue')) {
+      const cue = document.createElement('div');
+      cue.className = 'section-down-cue';
+      cue.setAttribute('aria-hidden', 'true');
+      cue.innerHTML = '<span class="section-down-chevron">⌄</span>';
+      section.appendChild(cue);
+    }
+  });
+
+  if (cueEligibleSections.length) {
+    const cueObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        const section = entry.target;
+
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.72) {
+          if (cueShown.has(section) || cueTimers.has(section)) return;
+          const timer = setTimeout(() => {
+            cueTimers.delete(section);
+            cueShown.add(section);
+            section.classList.remove('cue-page-tied');
+            section.classList.remove('cue-fading-out');
+            stopCueFadeParallax(section);
+            section.querySelector('.section-down-cue')?.style.setProperty('--cue-scroll-y', '0px');
+            section.classList.add('show-down-cue');
+          }, 2000);
+          cueTimers.set(section, timer);
+        } else {
+          if (cueTimers.has(section)) {
+            clearTimeout(cueTimers.get(section));
+            cueTimers.delete(section);
+          }
+          section.classList.remove('cue-page-tied');
+          stopCueFadeParallax(section);
+          section.querySelector('.section-down-cue')?.style.setProperty('--cue-scroll-y', '0px');
+          section.classList.remove('cue-fading-out');
+          section.classList.remove('show-down-cue');
+        }
+      });
+    }, { threshold: [0, 0.72, 0.9] });
+
+    cueEligibleSections.forEach(section => cueObserver.observe(section));
+  }
+
+  window.addEventListener('scroll', () => {
+    const currentScrollY = window.scrollY;
+    if (currentScrollY === lastScrollY) return;
+    startCueFade(currentScrollY > lastScrollY ? 'down' : 'up');
+    lastScrollY = currentScrollY;
+  }, { passive: true });
+
+  window.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) > 0) startCueFade(e.deltaY > 0 ? 'down' : 'up');
+  }, { passive: true });
+
+  window.addEventListener('touchstart', (e) => {
+    touchStartY = e.touches[0]?.clientY ?? null;
+  }, { passive: true });
+
+  window.addEventListener('touchmove', (e) => {
+    const y = e.touches[0]?.clientY;
+    if (touchStartY === null || y === undefined) return;
+    if (Math.abs(y - touchStartY) > 8) startCueFade(y < touchStartY ? 'down' : 'up');
+  }, { passive: true });
+
+  window.addEventListener('keydown', (e) => {
+    if (['ArrowDown', 'PageDown', ' ', 'Spacebar'].includes(e.key)) {
+      startCueFade('down');
+    } else if (['ArrowUp', 'PageUp'].includes(e.key)) {
+      startCueFade('up');
+    }
+  });
 
   // ===== Live Sequencer Grid =====
   const seqGrid = document.getElementById('seq-grid');
@@ -407,7 +666,7 @@ import { initVisuals } from './visuals.js?v=7';
 
   function animateSequencer() {
     const pattern = getStemPattern();
-    if (pattern && seqCells.length) {
+    if (pattern && seqPlaying && seqCells.length) {
       const elapsed = audioNow() - pattern.startTime;
       let col = Math.floor(elapsed / pattern.step);
       if (getSeqLoop()) col = ((col % 16) + 16) % 16;
