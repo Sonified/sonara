@@ -8,7 +8,15 @@
 
   const dpr = window.devicePixelRatio || 1;
   let w, h;
-  let time = -1.0;
+  const START_DELAY = 2.0;
+  const SWEEP_DURATION = 3.5;
+  const PAUSE_MIN = 6.0;
+  const PAUSE_MAX = 10.0;
+  const SWEEP_TRAVEL = 1.4;
+  let phase = 'delay';
+  let phaseTime = 0;
+  let currentPauseDuration = PAUSE_MIN + Math.random() * (PAUSE_MAX - PAUSE_MIN);
+  let lastFrameTime = null;
   let raysReady = false;
 
   canvas.style.opacity = '0';
@@ -207,9 +215,31 @@
     pCtx.globalCompositeOperation = 'source-over';
   }
 
-  function draw() {
-    time += 0.0055;
-    if (time < 0) { requestAnimationFrame(draw); return; }
+  function draw(now = performance.now()) {
+    if (lastFrameTime === null) lastFrameTime = now;
+    const dt = Math.min(50, now - lastFrameTime) / 1000;
+    lastFrameTime = now;
+    phaseTime += dt;
+
+    while (true) {
+      if (phase === 'delay' && phaseTime >= START_DELAY) {
+        phase = 'sweep';
+        phaseTime -= START_DELAY;
+        continue;
+      }
+      if (phase === 'sweep' && phaseTime >= SWEEP_DURATION) {
+        phase = 'pause';
+        phaseTime -= SWEEP_DURATION;
+        currentPauseDuration = PAUSE_MIN + Math.random() * (PAUSE_MAX - PAUSE_MIN);
+        continue;
+      }
+      if (phase === 'pause' && phaseTime >= currentPauseDuration) {
+        phase = 'sweep';
+        phaseTime -= currentPauseDuration;
+        continue;
+      }
+      break;
+    }
 
     const span = document.querySelector('.hero-title .glow-wrap');
     if (!span) { requestAnimationFrame(draw); return; }
@@ -223,24 +253,20 @@
     const textL = spanRect.left - canvasRect.left;
     const textR = textL + textW;
 
-    const half = (time * 0.28) % 1;
-    const sweeping = half < 0.48;
-    const lightProgress = sweeping ? half / 0.48 : 1 + (half - 0.48) / 0.52 * 0.4;
+    const sweeping = phase === 'sweep';
+    const sweepT = sweeping ? Math.min(1, phaseTime / SWEEP_DURATION) : 1;
+    const lightProgress = sweeping ? sweepT * SWEEP_TRAVEL : SWEEP_TRAVEL;
 
     const lightX = textL - textW * 0.4 + lightProgress * textW * 1.6;
     const lightY = textCY;
 
     const smooth = t => Math.sin(t * Math.PI * 0.5);
-    let breath = 0.55;
-    if (lightX < textL) {
+    let breath = sweeping ? 0.55 : 0;
+    if (sweeping && lightX < textL) {
       const t = Math.max(0, Math.min(1, 1 - (textL - lightX) / (textW * 0.6)));
       breath *= smooth(t);
-    } else if (lightX > textR) {
+    } else if (sweeping && lightX > textR) {
       const t = Math.max(0, Math.min(1, 1 - (lightX - textR) / (textW * 0.35)));
-      breath *= smooth(t);
-    }
-    if (!sweeping) {
-      const t = Math.max(0, Math.min(1, 1 - (half - 0.48) / 0.1));
       breath *= smooth(t);
     }
     if (breath < 0.08) breath = 0;
@@ -293,7 +319,7 @@
     const originU = maskX / w;
     const originV = lightY / h;
     gl.uniform2f(uOrigin, originU, originV);
-    gl.uniform1f(uStrength, 0.16);
+    gl.uniform1f(uStrength, 0.12);
     gl.uniform1f(uBreath, breath);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
