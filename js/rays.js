@@ -4,6 +4,7 @@
 
 (function() {
   const isMobileView = ('ontouchstart' in window) && window.innerWidth <= 768;
+  if (isMobileView) return; // no rays/shimmer/sparkles on mobile
 
   const canvas = document.getElementById('rays-canvas');
   if (!canvas) return;
