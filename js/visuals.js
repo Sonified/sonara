@@ -3,7 +3,7 @@
  * Hero particle field, citizen science waveform, dome starfield, synth wave.
  */
 
-import { getStemAnalyser, getHeroAnalyser } from './audio.js?v=5';
+import { getStemAnalyser, getHeroAnalyser } from './audio.js?v=7';
 
 let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
 document.addEventListener('mousemove', (e) => {
@@ -1111,8 +1111,8 @@ function initSynthWave() {
     c.clearRect(0, 0, w, h);
     time += 0.011;
 
-    const centerY = h * 0.58;
-    const amp = h * 0.36;
+    const centerY = h * 0.6;
+    const amp = h * 0.42;
     const analyser = getStemAnalyser();
 
     // Smooth morph between idle and live
@@ -1147,7 +1147,7 @@ function initSynthWave() {
         Math.sin(t * Math.PI * 4 + time) * 0.5 +
         Math.sin(t * Math.PI * 7 + time * 0.6) * 0.25 +
         Math.sin(t * Math.PI * 13 + time * 1.3) * 0.12;
-      const live = liveY ? liveY[x] * 5 : 0;
+      const live = liveY ? liveY[x] * 12 : 0;
       const blended = idleVal * (1 - liveBlend) + live * liveBlend;
       return centerY + blended * amp;
     }
@@ -1217,6 +1217,10 @@ function initSpectrumCanvas() {
     });
   }
 
+  let eqBlend = 0; // 0 = idle, 1 = live EQ
+  let freqData = null;
+  const smoothedBars = new Float32Array(BAR_COUNT); // smoothed EQ values per bar
+
   function draw() {
     if (!vis2.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
@@ -1226,16 +1230,57 @@ function initSpectrumCanvas() {
     const maxHeight = h * 0.45;
     const centerY = h * 0.65;
 
+    // Live EQ FFT feed — commented out, one layer too much
+    // const analyser = getStemAnalyser();
+    // const eqTarget = analyser ? 1 : 0;
+    // eqBlend += (eqTarget - eqBlend) * 0.04;
+    // if (analyser) {
+    //   if (!freqData || freqData.length !== analyser.frequencyBinCount) {
+    //     freqData = new Uint8Array(analyser.frequencyBinCount);
+    //   }
+    //   analyser.getByteFrequencyData(freqData);
+    //   const binCount = freqData.length;
+    //   const rawBars = new Float32Array(BAR_COUNT);
+    //   for (let b = 0; b < BAR_COUNT; b++) {
+    //     const startBin = Math.floor((b / BAR_COUNT) * binCount * 0.5);
+    //     const endBin = Math.floor(((b + 1) / BAR_COUNT) * binCount * 0.5);
+    //     let peak = 0;
+    //     for (let j = startBin; j < endBin; j++) { if (freqData[j] > peak) peak = freqData[j]; }
+    //     rawBars[b] = peak / 255;
+    //   }
+    //   for (let b = 0; b < BAR_COUNT; b++) {
+    //     const prev = b > 0 ? rawBars[b - 1] : rawBars[b];
+    //     const next = b < BAR_COUNT - 1 ? rawBars[b + 1] : rawBars[b];
+    //     const smoothed = prev * 0.25 + rawBars[b] * 0.5 + next * 0.25;
+    //     const target = Math.min(1, smoothed * 4);
+    //     const rate = target > smoothedBars[b] ? 0.35 : 0.08;
+    //     smoothedBars[b] += (target - smoothedBars[b]) * rate;
+    //   }
+    // } else {
+    //   for (let b = 0; b < BAR_COUNT; b++) smoothedBars[b] *= 0.95;
+    // }
+
     // Mouse influence: map mouse to canvas coords
     const rect = canvas.getBoundingClientRect();
     const mx = (mouseX - rect.left) / rect.width * w;
 
     for (let i = 0; i < BAR_COUNT; i++) {
       const bar = bars[i];
-      // Two layered sine waves for organic pulsing
+
+      // --- Idle animation (commented out original sine behavior) ---
+      // const wave1 = Math.sin(time * bar.freq + bar.phase) * 0.5 + 0.5;
+      // const wave2 = Math.sin(time * bar.freq2 + bar.phase2) * 0.3 + 0.5;
+      // const idleCombined = wave1 * 0.7 + wave2 * 0.3;
+
+      // Idle: gentle ambient sine waves
       const wave1 = Math.sin(time * bar.freq + bar.phase) * 0.5 + 0.5;
       const wave2 = Math.sin(time * bar.freq2 + bar.phase2) * 0.3 + 0.5;
-      const combined = wave1 * 0.7 + wave2 * 0.3;
+      const idleVal = wave1 * 0.7 + wave2 * 0.3;
+
+      // Live: use pre-computed smoothed bar values
+      const liveVal = smoothedBars[i];
+
+      const combined = idleVal * (1 - eqBlend) + liveVal * eqBlend;
 
       // Shape: louder in the middle, quieter at edges
       const shape = 1 - Math.pow((i / BAR_COUNT - 0.5) * 2, 2);
@@ -1247,9 +1292,11 @@ function initSpectrumCanvas() {
       const mouseBoost = Math.max(0, 1 - mouseDist / mouseRadius);
       const smoothBoost = mouseBoost * mouseBoost * mouseBoost; // cubic falloff
 
-      const targetHeight = combined * maxHeight * (0.15 + shape * 0.85) + smoothBoost * maxHeight * 0.12;
+      const idleShape = combined * maxHeight * (0.15 + shape * 0.85);
+      const liveShape = combined * maxHeight * (0.3 + shape * 0.7); // less edge falloff when live
+      const targetHeight = (idleShape * (1 - eqBlend) + liveShape * eqBlend) + smoothBoost * maxHeight * 0.12;
       const rising = targetHeight > bar.currentHeight;
-      bar.currentHeight += (targetHeight - bar.currentHeight) * (rising ? 0.015 : 0.04);
+      bar.currentHeight += (targetHeight - bar.currentHeight) * (rising ? 0.15 : 0.08);
       const barHeight = bar.currentHeight;
 
       const x = i * barWidth;

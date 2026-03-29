@@ -3,8 +3,8 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, killNow, seqRestart, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop } from './audio.js?v=5';
-import { initVisuals } from './visuals.js?v=5';
+import { play, stop, killNow, seqRestart, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb } from './audio.js?v=7';
+import { initVisuals } from './visuals.js?v=7';
 
 (function() {
   'use strict';
@@ -244,7 +244,7 @@ import { initVisuals } from './visuals.js?v=5';
     // Melody rows (always 5, high pitch to low)
     const melodyRows = pattern.melodyRows || [];
     melodyRows.forEach((rowData, r) => {
-      addRow(r === 2 ? 'SYN' : '', rowData, 'syn');
+      addRow('SYN', rowData, 'syn');
     });
 
     // Hat + Kick
@@ -341,21 +341,57 @@ import { initVisuals } from './visuals.js?v=5';
   }
 
   const seqPlayBtn = document.getElementById('seq-play');
+  let seqPlaying = false;
+  function setPlayState(playing) {
+    seqPlaying = playing;
+    if (seqPlayBtn) {
+      seqPlayBtn.innerHTML = playing
+        ? '<span style="vertical-align: 2px; font-size: 0.9em;">&#9646;&#9646;</span> Pause'
+        : '<span style="vertical-align: 2px;">&#9654;</span> Play';
+      seqPlayBtn.classList.toggle('clicked', playing);
+    }
+  }
   if (seqPlayBtn) {
     seqPlayBtn.addEventListener('click', () => {
-      seqPlayBtn.classList.add('clicked');
-      setStemPattern(currentDisplayPattern);
-      play('stem-music');
-      lastPlayheadCol = -1;
+      if (seqPlaying) {
+        stop('stem-music');
+        setPlayState(false);
+      } else {
+        setStemPattern(currentDisplayPattern);
+        play('stem-music');
+        lastPlayheadCol = -1;
+        setPlayState(true);
+      }
     });
   }
 
   const seqLoopBtn = document.getElementById('seq-loop');
   if (seqLoopBtn) {
+    if (getSeqLoop()) seqLoopBtn.classList.add('active');
     seqLoopBtn.addEventListener('click', () => {
       const newVal = !getSeqLoop();
       setSeqLoop(newVal);
       seqLoopBtn.classList.toggle('active', newVal);
+    });
+  }
+
+  const synthReverbBtn = document.getElementById('synth-reverb');
+  if (synthReverbBtn) {
+    if (getSeqReverb()) synthReverbBtn.classList.add('active');
+    synthReverbBtn.addEventListener('click', () => {
+      const newVal = !getSeqReverb();
+      setSeqReverb(newVal);
+      synthReverbBtn.classList.toggle('active', newVal);
+    });
+  }
+
+  const synthDelayBtn = document.getElementById('synth-delay');
+  if (synthDelayBtn) {
+    if (getSeqDelay()) synthDelayBtn.classList.add('active');
+    synthDelayBtn.addEventListener('click', () => {
+      const newVal = !getSeqDelay();
+      setSeqDelay(newVal);
+      synthDelayBtn.classList.toggle('active', newVal);
     });
   }
 
@@ -376,6 +412,11 @@ import { initVisuals } from './visuals.js?v=5';
             cell.classList.toggle('lit', i === col && col >= 0 && col < 16 && cell.classList.contains('active'));
           });
         });
+        // Flash loop button on downbeat when looping
+        if (getSeqLoop() && col === 0 && seqLoopBtn) {
+          seqLoopBtn.classList.add('flash');
+          setTimeout(() => seqLoopBtn.classList.remove('flash'), 150);
+        }
       }
     } else if (lastPlayheadCol !== -1) {
       lastPlayheadCol = -1;
@@ -384,6 +425,7 @@ import { initVisuals } from './visuals.js?v=5';
           cell.classList.remove('playhead', 'lit');
         });
       });
+      if (seqPlaying) setPlayState(false);
     }
     requestAnimationFrame(animateSequencer);
   }

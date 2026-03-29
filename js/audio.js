@@ -63,14 +63,11 @@ async function prefetchPeriodicWaves() {
   const wtList = document.getElementById('wt-list');
   if (wtWrap && wtCurrent && wtList) {
     wtList.innerHTML = '';
-    // Sort THEMIS wavetables to the top of the list
+    // Sort: THEMIS first, then Proton Beam, then the rest
+    const wtOrder = (n) => n.includes('THEMIS') ? 0 : n.includes('Proton_Beam') ? 1 : 2;
     const wtKeys = Object.keys(periodicWaveData)
       .filter(n => !skipWavetables.includes(n))
-      .sort((a, b) => {
-        const aT = a.includes('THEMIS') ? 0 : 1;
-        const bT = b.includes('THEMIS') ? 0 : 1;
-        return aT - bT;
-      });
+      .sort((a, b) => wtOrder(a) - wtOrder(b));
     let first = true;
     for (const name of wtKeys) {
       const btn = document.createElement('button');
@@ -283,7 +280,7 @@ async function citizenScienceSound(ac, master) {
 
 // ===== STEM-MUSIC: Pattern generation + playback =====
 export function generateStemPattern() {
-  const bpm = 110 + Math.floor(Math.random() * 30);
+  const bpm = 125;
   const step = 60 / bpm / 2;
 
   // Kick — biased toward on-beats (0, 4, 8, 12)
@@ -312,12 +309,21 @@ export function generateStemPattern() {
   const melodyRows = pitches.map(() => new Array(16).fill(0));
   const melodyFreqs = Array.from({ length: 16 }, () => []);
 
-  const noteCount = 6 + Math.floor(Math.random() * 3);
+  const noteCount = 8 + Math.floor(Math.random() * 5);
   const waveTypes = ['sawtooth', 'triangle', 'square'];
   const waveType = waveTypes[Math.floor(Math.random() * waveTypes.length)];
 
+  // Weighted step selection: downbeats (0,4,8,12) ~3x more likely
+  const stepWeights = Array.from({ length: 16 }, (_, i) => i % 4 === 0 ? 3 : 1);
+  const totalWeight = stepWeights.reduce((a, b) => a + b, 0);
+  function weightedStep() {
+    let r = Math.random() * totalWeight;
+    for (let i = 0; i < 16; i++) { r -= stepWeights[i]; if (r <= 0) return i; }
+    return 15;
+  }
+
   for (let n = 0; n < noteCount; n++) {
-    const stepIdx = Math.floor(Math.random() * 16);
+    const stepIdx = weightedStep();
     const rowIdx = Math.floor(Math.random() * 5);
     melodyRows[rowIdx][stepIdx] = 1;
     if (!melodyFreqs[stepIdx].includes(pitches[rowIdx])) {
@@ -335,9 +341,41 @@ let seqAc = null;
 let seqMaster = null;
 let seqSynthBus = null;
 let seqRevG = null;
+let seqConv = null;
 let seqKickBuf = null;
 let seqHatBuf = null;
-let seqLooping = false;
+let seqLooping = (() => { try { return localStorage.getItem('sonara-loop') === '1'; } catch(e) { return false; } })();
+let seqReverbOn = (() => { try { return localStorage.getItem('sonara-reverb') !== '0'; } catch(e) { return true; } })();
+let seqDelayOn = (() => { try { return localStorage.getItem('sonara-delay') === '1'; } catch(e) { return false; } })();
+let seqDelayNode = null;
+let seqDelayFeedback = null;
+let seqDelayGain = null;
+
+export function setSeqReverb(val) { seqReverbOn = val; try { localStorage.setItem('sonara-reverb', val ? '1' : '0'); } catch(e) {} updateReverbRouting(); }
+export function getSeqReverb() { return seqReverbOn; }
+
+function updateReverbRouting() {
+  if (!seqConv || !seqSynthBus) return;
+  if (seqReverbOn) {
+    try { seqSynthBus.connect(seqConv); } catch(e) {}
+    if (seqDelayGain) try { seqDelayGain.connect(seqConv); } catch(e) {}
+  } else {
+    try { seqSynthBus.disconnect(seqConv); } catch(e) {}
+    if (seqDelayGain) try { seqDelayGain.disconnect(seqConv); } catch(e) {}
+  }
+}
+
+export function setSeqDelay(val) { seqDelayOn = val; try { localStorage.setItem('sonara-delay', val ? '1' : '0'); } catch(e) {} updateDelayRouting(); }
+export function getSeqDelay() { return seqDelayOn; }
+
+function updateDelayRouting() {
+  if (!seqDelayNode || !seqSynthBus) return;
+  if (seqDelayOn) {
+    try { seqSynthBus.connect(seqDelayNode); } catch(e) {}
+  } else {
+    try { seqSynthBus.disconnect(seqDelayNode); } catch(e) {}
+  }
+}
 
 export function setSeqLoop(val) {
   // When turning off loop, reset step to current position within the bar
@@ -346,12 +384,13 @@ export function setSeqLoop(val) {
     seqStep = seqStep % 16;
   }
   seqLooping = val;
+  try { localStorage.setItem('sonara-loop', val ? '1' : '0'); } catch(e) {}
 }
 export function getSeqLoop() { return seqLooping; }
 
 function seqTriggerStep(pat) {
   const col = seqStep % 16;
-  const t = seqAc.currentTime;
+  const t = seqAc.currentTime + 0.05;
   const step = pat.step;
   const wt = getSelectedWavetable();
 
@@ -370,9 +409,9 @@ function seqTriggerStep(pat) {
   if (pat.hat[col] && seqHatBuf) {
     const src = seqAc.createBufferSource();
     src.buffer = seqHatBuf;
-    src.playbackRate.value = 1.5 + Math.random();
+    src.playbackRate.value = 1.8 + Math.random();
     const g = seqAc.createGain();
-    g.gain.value = 0.35;
+    g.gain.value = 0.25;
     src.connect(g);
     g.connect(seqMaster);
     src.start(t);
@@ -415,16 +454,38 @@ async function stemMusicSound(ac, master, prePattern) {
   seqMaster = master;
 
   if (!seqRevG) {
-    const conv = ac.createConvolver();
-    conv.buffer = makeReverb(ac, 2, 2);
-    seqRevG = ac.createGain();
-    seqRevG.gain.value = 0.3;
-    conv.connect(seqRevG);
-    seqRevG.connect(master);
+    // Chain: synthBus → master (dry)
+    //        synthBus → [delay →] conv → revG → master (wet)
+    // Delay feeds INTO reverb so echoes get the wash.
     seqSynthBus = ac.createGain();
     seqSynthBus.gain.value = 1;
-    seqSynthBus.connect(conv);
-    seqSynthBus.connect(master);
+    seqSynthBus.connect(master);                   // dry path always on
+
+    // Delay: synthBus → delay → feedback → delayGain
+    seqDelayNode = ac.createDelay(1.0);
+    seqDelayNode.delayTime.value = 0.33;
+    seqDelayFeedback = ac.createGain();
+    seqDelayFeedback.gain.value = 0.4;
+    seqDelayGain = ac.createGain();
+    seqDelayGain.gain.value = 0.35;
+    seqDelayNode.connect(seqDelayFeedback);
+    seqDelayFeedback.connect(seqDelayNode);
+    seqDelayNode.connect(seqDelayGain);
+    seqDelayGain.connect(master);                  // delay dry out
+    if (seqDelayOn) seqSynthBus.connect(seqDelayNode);
+
+    // Reverb: conv → revG → master (last in chain)
+    seqConv = ac.createConvolver();
+    seqConv.buffer = makeReverb(ac, 3, 1.5);
+    seqRevG = ac.createGain();
+    seqRevG.gain.value = 0.55;
+    seqConv.connect(seqRevG);
+    seqRevG.connect(master);
+    // Feed both dry synth AND delay output into reverb
+    if (seqReverbOn) {
+      seqSynthBus.connect(seqConv);
+      seqDelayGain.connect(seqConv);
+    }
   }
 
   // Load samples
@@ -450,7 +511,11 @@ async function stemMusicSound(ac, master, prePattern) {
       delete activeNodes['stem-music'];
       stemAnalyser = null;
       seqRevG = null;
+      seqConv = null;
       seqSynthBus = null;
+      seqDelayNode = null;
+      seqDelayFeedback = null;
+      seqDelayGain = null;
       // Delay master disconnect so last notes ring out
       if (entry) {
         setTimeout(() => {
@@ -593,6 +658,8 @@ export async function play(id) {
     stemAnalyser = ac.createAnalyser();
     stemAnalyser.fftSize = 2048;
     (result.synthBus || master).connect(stemAnalyser);
+    if (seqDelayGain) seqDelayGain.connect(stemAnalyser);
+    if (seqRevG) seqRevG.connect(stemAnalyser);
   }
   // Attach analyser for hero audio reactivity
   if (id === 'hero') {
@@ -614,7 +681,11 @@ export function stop(id) {
   if (id === 'stem-music') {
     stemAnalyser = null;
     seqRevG = null;
+    seqConv = null;
     seqSynthBus = null;
+    seqDelayNode = null;
+    seqDelayFeedback = null;
+    seqDelayGain = null;
     if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
   }
   if (id === 'hero') heroAnalyser = null;
@@ -657,7 +728,11 @@ export function killNow(id) {
   if (id === 'stem-music') {
     stemAnalyser = null;
     seqRevG = null;
+    seqConv = null;
     seqSynthBus = null;
+    seqDelayNode = null;
+    seqDelayFeedback = null;
+    seqDelayGain = null;
     if (seqInterval) { clearInterval(seqInterval); seqInterval = null; }
   }
   if (id === 'hero') heroAnalyser = null;

@@ -777,8 +777,8 @@ a:hover { opacity: 0.7; }
 }
 
 .instrument-card {
-  background: var(--bg-card);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: #161620;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   padding: 0;
   overflow: hidden;
@@ -793,6 +793,12 @@ a:hover { opacity: 0.7; }
   font-size: 1.1rem;
   font-weight: 500;
   padding: 1.25rem 1.5rem 0.5rem;
+}
+
+.demo-tag {
+  color: rgba(255, 255, 255, 0.35);
+  font-weight: 400;
+  font-size: 0.75em;
 }
 
 .instrument-card p {
@@ -841,7 +847,11 @@ a:hover { opacity: 0.7; }
   transition: background 0.2s, border-color 0.2s;
 }
 .seq-play {
-  animation: seqPlayPulse 2s ease-in-out infinite;
+  width: 5.5rem;
+  height: 1.6rem;
+  line-height: 1;
+  text-align: center;
+  animation: seqPlayPulse 0.9s ease-in-out infinite;
 }
 
 .seq-play.clicked {
@@ -883,6 +893,13 @@ a:hover { opacity: 0.7; }
 }
 .seq-toolbar { gap: 0.5rem; }
 
+.seq-loop.flash {
+  color: rgba(160, 130, 210, 1);
+  background: rgba(160, 130, 210, 0.45);
+  border-color: rgba(160, 130, 210, 0.7);
+  box-shadow: 0 0 10px rgba(139, 110, 192, 0.5);
+}
+
 /* Sequencer visual */
 .seq-grid {
   display: grid;
@@ -893,7 +910,7 @@ a:hover { opacity: 0.7; }
 }
 
 .seq-label {
-  font-size: 0.55rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
@@ -969,6 +986,38 @@ a:hover { opacity: 0.7; }
   font-family: var(--font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.04em;
+}
+
+.synth-fx-btns {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.8rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+}
+.synth-fx-btn {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(160, 130, 210, 0.55);
+  background: rgba(60, 45, 90, 0.35);
+  border: 1px solid rgba(120, 100, 170, 0.25);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.synth-fx-btn:hover {
+  background: rgba(60, 45, 90, 0.55);
+  border-color: rgba(120, 100, 170, 0.4);
+}
+.synth-fx-btn.active {
+  color: rgba(160, 130, 210, 0.9);
+  background: rgba(60, 45, 90, 0.6);
+  border: 1px solid rgba(120, 100, 170, 0.4);
+  box-shadow: 0 0 6px rgba(139, 110, 192, 0.2);
 }
 
 .wt-prefix {

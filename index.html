@@ -127,8 +127,8 @@
         <p class="music-subtitle">Building creative instruments from NASA data</p>
       </div>
       <div class="seq-toolbar">
-        <button class="seq-play" id="seq-play">&#9654; Play</button>
-        <button class="seq-loop" id="seq-loop"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg> Loop</button>
+        <button class="seq-play" id="seq-play"><span style="vertical-align: 2px;">&#9654;</span> Play</button>
+        <button class="seq-loop" id="seq-loop"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px;"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg> Loop</button>
         <button class="seq-randomize" id="seq-randomize">Randomize</button>
       </div>
       <div class="instruments-grid">
@@ -136,7 +136,7 @@
           <div class="instrument-visual sequencer-visual">
             <div class="seq-grid" id="seq-grid"></div>
           </div>
-          <h3>SONARA Sequencer</h3>
+          <h3>SONARA Sequencer <span class="demo-tag">(Demo)</span></h3>
           <p>Web-based rhythmic pattern builder using audified heliophysics data as source material.</p>
         </div>
         <div class="instrument-card">
@@ -148,9 +148,13 @@
                 <div class="wt-list" id="wt-list"></div>
               </div>
             </div>
+            <div class="synth-fx-btns">
+              <button class="synth-fx-btn" id="synth-delay">Delay</button>
+              <button class="synth-fx-btn" id="synth-reverb">Reverb</button>
+            </div>
             <canvas id="synth-wave-canvas"></canvas>
           </div>
-          <h3>SONARA Synth</h3>
+          <h3>SONARA Synth <span class="demo-tag">(Demo)</span></h3>
           <p>A wavetable synthesizer that loads audified satellite data as oscillator sources. Play the magnetosphere.</p>
         </div>
         <div class="instrument-card">
@@ -169,7 +173,7 @@
       <div class="music-evidence">
         <div class="evidence-stat">
           <span class="evidence-number">100M+</span>
-          <span class="evidence-label">streams on prior collaboration</span>
+          <span class="evidence-label">PRIOR COLLABORATION STREAMS</span>
         </div>
         <div class="evidence-stat">
           <span class="evidence-number">113</span>
@@ -280,9 +284,9 @@
     </div>
   </section>
 
-  <script src="js/rays.js?v=5"></script>
-  <script type="module" src="js/audio.js?v=5"></script>
-  <script type="module" src="js/visuals.js?v=5"></script>
-  <script type="module" src="js/main.js?v=5"></script>
+  <script src="js/rays.js?v=7"></script>
+  <script type="module" src="js/audio.js?v=7"></script>
+  <script type="module" src="js/visuals.js?v=7"></script>
+  <script type="module" src="js/main.js?v=7"></script>
 </body>
 </html>
