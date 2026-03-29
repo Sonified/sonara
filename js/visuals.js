@@ -51,6 +51,8 @@ function initHeroCanvas() {
   const heroRmsData = new Uint8Array(128);
   let rmsSmooth = 0;
   let lastRippleTime = 0;
+  let rippleClickTime = 0;
+  const RIPPLE_BURST_DURATION = 10000; // 10s decay
   const listenBtn = document.querySelector('#hero .listen-btn');
 
   function spawnRipple() {
@@ -67,6 +69,10 @@ function initHeroCanvas() {
       heroAudioPlaying = listenBtn.classList.contains('playing');
     });
     mo.observe(listenBtn, { attributes: true, attributeFilter: ['class'] });
+    listenBtn.addEventListener('click', () => {
+      rippleClickTime = performance.now();
+      spawnRipple();
+    });
   }
 
   // --- Shader sources ---
@@ -248,9 +254,16 @@ function initHeroCanvas() {
       audioIntensity += (target - audioIntensity) * rate;
       rmsSmooth += (target - rmsSmooth) * 0.008;
       const now = performance.now();
-      if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) {
-        spawnRipple();
-        lastRippleTime = now;
+      // Ripples: triggered by click, fade out over 10s, then stop
+      const rippleAge = now - rippleClickTime;
+      if (rippleClickTime > 0 && rippleAge < RIPPLE_BURST_DURATION) {
+        const decay = 1 - rippleAge / RIPPLE_BURST_DURATION; // 1→0 over 10s
+        // Spawn rate slows: 800ms at start → 4000ms near end
+        const interval = 800 + (1 - decay) * 3200;
+        if (target > rmsSmooth + 0.35 && now - lastRippleTime > interval) {
+          spawnRipple();
+          lastRippleTime = now;
+        }
       }
     } else {
       audioIntensity += (0 - audioIntensity) * 0.02;

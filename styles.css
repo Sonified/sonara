@@ -300,8 +300,26 @@ a:hover { opacity: 0.7; }
   letter-spacing: 0.05em;
   cursor: pointer;
   opacity: 0;
-  animation: fadeUp 1s ease forwards 1.1s;
   transition: all 0.4s ease;
+}
+
+.listen-btn:not(.clicked) {
+  animation: fadeUp 1s ease forwards 1.1s, listenPulse 2.5s ease-in-out 2.1s infinite;
+}
+
+.listen-btn.clicked {
+  animation: fadeUp 1s ease forwards 1.1s;
+}
+
+@keyframes listenPulse {
+  0%, 100% {
+    border-color: rgba(212, 168, 67, 0.35);
+    box-shadow: 0 0 0 rgba(212, 168, 67, 0);
+  }
+  50% {
+    border-color: rgba(212, 168, 67, 0.85);
+    box-shadow: 0 0 14px rgba(212, 168, 67, 0.4), 0 0 32px rgba(212, 168, 67, 0.12);
+  }
 }
 
 .listen-btn:hover {
@@ -386,15 +404,22 @@ a:hover { opacity: 0.7; }
   align-items: center;
   gap: 0.5rem;
   opacity: 0;
-  animation: fadeIn 1.2s ease forwards 2s;
+  transition: opacity 1.2s ease;
+}
+
+.scroll-hint.visible {
+  opacity: 1;
 }
 
 .scroll-hint span {
   font-family: var(--font-mono);
   font-size: 0.9rem;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.35);
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.scroll-hint.pulsing span {
   animation: hintPulse 2.5s ease-in-out infinite;
 }
 
@@ -402,6 +427,9 @@ a:hover { opacity: 0.7; }
   width: 2px;
   height: 48px;
   background: linear-gradient(to bottom, var(--text-muted), transparent);
+}
+
+.scroll-hint.pulsing .scroll-arrow {
   animation: scrollPulse 2s ease-in-out infinite;
 }
 
@@ -497,8 +525,9 @@ a:hover { opacity: 0.7; }
 }
 
 .cascade-icon {
-  font-size: 2rem;
   margin-bottom: 1rem;
+  color: var(--accent);
+  opacity: 0.8;
 }
 
 .cascade-step p {

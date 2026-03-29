@@ -190,6 +190,15 @@ import { initVisuals } from './visuals.js?v=7';
     btn.addEventListener('click', async () => {
       const soundId = getSoundId(btn);
       if (!soundId) return;
+      btn.classList.add('clicked');
+      // Show scroll hint on listen click, pulse after 10s
+      if (btn.classList.contains('listen-btn')) {
+        const hint = document.querySelector('.scroll-hint');
+        if (hint && !hint.classList.contains('visible')) {
+          hint.classList.add('visible');
+          setTimeout(() => hint.classList.add('pulsing'), 10000);
+        }
+      }
       if (fadingButtons.has(btn)) {
         console.log(`[MAIN v3] click ignored — "${soundId}" is fading`);
         return;
@@ -220,12 +229,13 @@ import { initVisuals } from './visuals.js?v=7';
   });
 
   // ===== Scroll Hint Fade =====
+  // Only show/hide based on hero visibility AFTER the hint has been revealed by listen click
   const scrollHint = document.querySelector('.scroll-hint');
   if (scrollHint) {
     const hintObs = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-        scrollHint.style.opacity = entry.isIntersecting ? '1' : '0';
-        scrollHint.style.transition = 'opacity 0.5s ease';
+        if (!scrollHint.classList.contains('visible')) return;
+        scrollHint.style.opacity = entry.isIntersecting ? '' : '0';
       });
     }, { threshold: 0.8 });
     const hero = document.getElementById('hero');
