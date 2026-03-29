@@ -248,6 +248,15 @@ import { initVisuals } from './visuals.js?v=8';
   const heroBtn = document.querySelector('.listen-btn');
   const fadingButtons = new Set();
 
+  // When the entrance fadeUp finishes, switch to pulse mode
+  if (heroBtn) {
+    heroBtn.addEventListener('animationend', (e) => {
+      if (e.animationName === 'fadeUp') {
+        heroBtn.classList.add('entrance-done');
+      }
+    }, { once: true });
+  }
+
   // Track auto-end timers so we can cancel them on manual stop
   const autoEndTimers = new Map();
 
@@ -307,9 +316,6 @@ import { initVisuals } from './visuals.js?v=8';
       if (btn.classList.contains('listen-btn')) {
         btn.classList.add('settled');
       }
-      if (!btn.classList.contains('listen-btn')) {
-        btn.classList.add('clicked');
-      }
       // Show scroll hint after 5s on first listen click, then pulse later
       if (btn.classList.contains('listen-btn')) {
         const hint = document.querySelector('.scroll-hint');
@@ -343,9 +349,14 @@ import { initVisuals } from './visuals.js?v=8';
         console.log(`[MAIN v3] click → stop "${soundId}"`);
         fadeStop(btn, soundId);
       } else {
-        const result = await play(soundId);
-        if (result === false) return; // already playing somehow
+        // Add playing class IMMEDIATELY so visuals transition from current
+        // state — don't wait for audio to load/start
         btn.classList.add('playing');
+        const result = await play(soundId);
+        if (result === false) {
+          btn.classList.remove('playing');
+          return;
+        }
         if (soundId === 'hero') scheduleHeroHintCopy();
         if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.add('pulsing');
         // Finite-duration sound: poll audio clock for precise end
@@ -371,7 +382,7 @@ import { initVisuals } from './visuals.js?v=8';
         }
         const rms = Math.sqrt(sum / heroRmsData.length);
         const intensity = Math.min(1, rms * 5);
-        const target = 0.03 + intensity * 0.35;
+        const target = 0.07 + intensity * 0.35;
         smoothAlpha += (target - smoothAlpha) * 0.15;
         heroBtn.style.background = `rgba(212, 168, 67, ${smoothAlpha})`;
       } else {

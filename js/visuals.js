@@ -16,6 +16,9 @@ document.addEventListener('mousemove', (e) => {
   mouseY = e.clientY;
 });
 
+// Mobile detection — touch device with narrow viewport
+const isMobileView = ('ontouchstart' in window) && window.innerWidth <= 768;
+
 // Shared visibility tracker — returns { visible, wasHidden } per section
 function trackVisibility(sectionId) {
   const state = { visible: sectionId === 'hero', firstReveal: true, _intersecting: sectionId === 'hero' };
@@ -277,7 +280,26 @@ function initHeroCanvas() {
       mouseSwirlMix = t;
     }
 
-    // --- Audio RMS ---
+    // --- Audio RMS (or synthetic mobile intensity) ---
+    if (isMobileView) {
+      // Synthetic intensity: layered sine waves for organic rise/fall
+      const t = now * 0.001; // seconds
+      // Slow breath (period ~12s), medium swell (~5s), fast shimmer (~1.8s)
+      const breath = Math.sin(t * 0.52) * 0.5 + 0.5;       // 0–1 over ~12s
+      const swell  = Math.sin(t * 1.26 + 1.7) * 0.5 + 0.5; // 0–1 over ~5s
+      const shimmer = Math.sin(t * 3.5 + 0.3) * 0.5 + 0.5;  // 0–1 over ~1.8s
+      // Compose: breath dominates, swell adds variation, shimmer adds texture
+      const synthetic = breath * 0.55 + swell * 0.3 + shimmer * 0.15;
+      // Scale to match what real audio produces (typically 0.05–0.65)
+      const target = synthetic * 0.55 + 0.05;
+      const transientTarget = synthetic * 0.7 + 0.05;
+      const rate = target > audioIntensity ? 0.25 : 0.12;
+      audioIntensity += (target - audioIntensity) * rate;
+      audioTransient += (transientTarget - audioTransient) * 0.45;
+      rmsSmooth += (target - rmsSmooth) * 0.018;
+      // Disable mouse swirl on mobile (no mouse anyway)
+      mouseSwirlMix = 0;
+    } else {
     const heroAn = getHeroAnalyser();
     if (heroAn) {
       heroAn.getByteTimeDomainData(heroRmsData);
@@ -310,6 +332,7 @@ function initHeroCanvas() {
       audioTransient += (0 - audioTransient) * 0.34;
       rmsSmooth = 0;
     }
+    } // end desktop audio block
 
     // Keep particle ripple field fully driven by audio again.
     rippleHead = (rippleHead + 1) % RIPPLE_BUF_LEN;
@@ -470,13 +493,15 @@ function initHeroCanvas() {
     for (const ck of toDelete) connFade.delete(ck);
     const lineVertCount = lineIdx / 3; // 3 floats per vertex (x, y, alpha)
 
-    // --- Button center ---
+    // --- Button center (on mobile, force center of screen) ---
     let btnCX = w * 0.5, btnCY = h * 0.5;
-    if (listenBtn) {
+    if (!isMobileView && listenBtn) {
       const btnRect = listenBtn.getBoundingClientRect();
-      const canRect = canvas.getBoundingClientRect();
-      btnCX = (btnRect.left + btnRect.width * 0.5 - canRect.left) * (w / canRect.width);
-      btnCY = (btnRect.top + btnRect.height * 0.5 - canRect.top) * (h / canRect.height);
+      if (btnRect.width > 0) {
+        const canRect = canvas.getBoundingClientRect();
+        btnCX = (btnRect.left + btnRect.width * 0.5 - canRect.left) * (w / canRect.width);
+        btnCY = (btnRect.top + btnRect.height * 0.5 - canRect.top) * (h / canRect.height);
+      }
     }
 
     // --- Physics + fill particle buffer ---
@@ -719,6 +744,16 @@ function initHeroCanvas2D() {
     if (!heroVis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.005;
+    if (isMobileView) {
+      const t = performance.now() * 0.001;
+      const breath = Math.sin(t * 0.52) * 0.5 + 0.5;
+      const swell  = Math.sin(t * 1.26 + 1.7) * 0.5 + 0.5;
+      const shimmer = Math.sin(t * 3.5 + 0.3) * 0.5 + 0.5;
+      const synthetic = breath * 0.55 + swell * 0.3 + shimmer * 0.15;
+      const target = synthetic * 0.55 + 0.05;
+      audioIntensity += ((target > audioIntensity ? 0.25 : 0.12) * (target - audioIntensity));
+      rmsSmooth += (target - rmsSmooth) * 0.018;
+    } else {
     const heroAn = getHeroAnalyser();
     if (heroAn) {
       heroAn.getByteTimeDomainData(heroRmsData);
@@ -731,6 +766,7 @@ function initHeroCanvas2D() {
       const now = performance.now();
       if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) { spawnRipple(); lastRippleTime = now; }
     } else { audioIntensity += (0 - audioIntensity) * 0.08; rmsSmooth = 0; }
+    }
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       if (p.age !== undefined) p.age++;
@@ -750,7 +786,7 @@ function initHeroCanvas2D() {
     const aiBB = 1 + audioIntensity * 2, als = [0.06 * aiBB, 0.048 * aiBB, 0.036 * aiBB, 0.024 * aiBB, 0.012 * aiBB];
     for (let b = 0; b < 5; b++) { const lines = buckets[b]; if (!lines.length) continue; c.strokeStyle = `rgba(212,168,67,${als[b]})`; c.beginPath(); for (let k = 0; k < lines.length; k += 4) { c.moveTo(lines[k], lines[k + 1]); c.lineTo(lines[k + 2], lines[k + 3]); } c.stroke(); }
     let btnCX = w * 0.5, btnCY = h * 0.5;
-    if (listenBtn) { const br = listenBtn.getBoundingClientRect(), cr = canvas.getBoundingClientRect(); btnCX = (br.left + br.width * 0.5 - cr.left) * (w / cr.width); btnCY = (br.top + br.height * 0.5 - cr.top) * (h / cr.height); }
+    if (!isMobileView && listenBtn) { const br = listenBtn.getBoundingClientRect(); if (br.width > 0) { const cr = canvas.getBoundingClientRect(); btnCX = (br.left + br.width * 0.5 - cr.left) * (w / cr.width); btnCY = (br.top + br.height * 0.5 - cr.top) * (h / cr.height); } }
     const scaleX = w / window.innerWidth, scaleY = h / window.innerHeight, mx = mouseX * scaleX, my = mouseY * scaleY;
     const glowList = [];
     for (let i = 0; i < particles.length; i++) {
