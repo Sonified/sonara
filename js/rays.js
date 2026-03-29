@@ -160,16 +160,19 @@
     if (particles.length > MAX_PARTICLES) return;
     const angle = (Math.random() - 0.5) * 1.6;
     const speed = 0.12 + Math.random() * 0.38;
-    const baseAlpha = 0.5 + Math.random() * 0.1;
+    const baseAlpha = 0.2 + Math.random() * 0.2;
+    const centerWeighted = Math.random() < 0.5;
+    const xSpread = centerWeighted ? tw * 0.08 : tw * 0.18;
+    const ySpread = centerWeighted ? 220 : 520;
     particles.push({
-      x: lx + tw * 0.08 + (Math.random() - 0.5) * tw * 0.18,
-      y: ly + (Math.random() - 0.5) * 520,
+      x: lx + tw * 0.08 + (Math.random() - 0.5) * xSpread,
+      y: ly + (Math.random() - 0.5) * ySpread,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       alpha: baseAlpha,
       baseAlpha,
       life: 1,
-      decay: 0.0017 + Math.random() * 0.0028,
+      decay: 0.0038 + Math.random() * 0.0048,
       size: 1.8 + Math.random() * 3.4
     });
   }
@@ -194,8 +197,8 @@
         const a = particles[i], b = particles[j];
         const dx = a.x - b.x, dy = a.y - b.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 225) {
-          const lineAlpha = (1 - dist / 225) * Math.min(a.life, b.life) * 0.3;
+        if (dist < 200) {
+          const lineAlpha = (1 - dist / 200) * Math.min(a.life, b.life) * 0.24;
           pCtx.globalAlpha = lineAlpha;
           pCtx.strokeStyle = 'rgba(255, 230, 170, 1)';
           pCtx.lineWidth = 0.8;

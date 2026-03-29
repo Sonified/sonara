@@ -61,6 +61,7 @@ function initHeroCanvas() {
   let stopTime = 0;
   const MOUSE_SWIRL_FADE_MS = 5000;
   const MOUSE_SWIRL_RETURN_MS = 1000;
+  const MOUSE_INTERACTION_MULT = 0.67;
   const heroRmsData = new Uint8Array(128);
   let rmsSmooth = 0;
   let lastRippleTime = 0;
@@ -284,11 +285,11 @@ function initHeroCanvas() {
       const rms = Math.sqrt(sum / heroRmsData.length);
       const target = Math.min(1, rms * 10);
       const transientTarget = Math.min(1, rms * 16);
-      const rate = target > audioIntensity ? 0.25 : 0.06;
+      const rate = target > audioIntensity ? 0.42 : 0.16;
       audioIntensity += (target - audioIntensity) * rate;
       // Keep this channel intentionally faster/rougher than audioIntensity.
-      audioTransient += (transientTarget - audioTransient) * 0.45;
-      rmsSmooth += (target - rmsSmooth) * 0.008;
+      audioTransient += (transientTarget - audioTransient) * 0.68;
+      rmsSmooth += (target - rmsSmooth) * 0.018;
       // Ripples: triggered by click, fade out over 10s, then stop
       const rippleAge = now - rippleClickTime;
       if (rippleClickTime > 0 && rippleAge < RIPPLE_BURST_DURATION) {
@@ -301,8 +302,8 @@ function initHeroCanvas() {
         }
       }
     } else {
-      audioIntensity += (0 - audioIntensity) * 0.02;
-      audioTransient += (0 - audioTransient) * 0.18;
+      audioIntensity += (0 - audioIntensity) * 0.08;
+      audioTransient += (0 - audioTransient) * 0.34;
       rmsSmooth = 0;
     }
 
@@ -322,7 +323,7 @@ function initHeroCanvas() {
     }
     const fillRatio = Math.min(1, particles.length / MAX_PARTICLES); // 0→1 as we approach 2k
     const audioRate = 0.15 + 0.4 * (1 - fillRatio); // 0.55 when empty → 0.15 at cap
-    const spawnRate = audioIntensity > 0.01 ? audioRate : 0.15;
+    const spawnRate = audioIntensity > 0.01 ? audioRate * 2 : 0.15;
     if (particles.length < MAX_PARTICLES && Math.random() < spawnRate) {
       particles.push({
         pid: nextPid++,
@@ -370,7 +371,7 @@ function initHeroCanvas() {
     const MAX_CONN = 3;
     const connCount = new Uint8Array(particles.length);
     // Smooth line brightness separately — much slower than audioIntensity
-    lineIntensity += (audioIntensity - lineIntensity) * 0.015;
+    lineIntensity += (audioIntensity - lineIntensity) * 0.05;
     const aiBrightBoost = 1 + lineIntensity * 2;
     const lineAlphas = [
       0.06 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
@@ -488,7 +489,9 @@ function initHeroCanvas() {
       const dxB = p.x - btnCX, dyB = p.y - btnCY;
       const distFromBtn = Math.sqrt(dxB * dxB + dyB * dyB);
       const localIntensity = getDelayedIntensity(distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
-      const audioBoost = localIntensity * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
+      const attenuationRadius = Math.max(w, h) * 0.6;
+      const radialAttenuation = Math.pow(Math.max(0, 1 - distFromBtn / attenuationRadius), 2.6);
+      const audioBoost = localIntensity * radialAttenuation * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
       const tremble = (Math.random() - 0.5) * 0.12 * localIntensity * react;
       const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * HERO_PARTICLE_BRIGHTNESS);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
@@ -535,8 +538,8 @@ function initHeroCanvas() {
         if (d2 < 336400) {
           const mdist = Math.sqrt(d2);
           const proximity = 1 - mdist / 580;
-          const force = proximity * 0.00006 * mouseSwirlMix;
-          const swirl = proximity * 0.00008 * mouseSwirlMix;
+          const force = proximity * 0.00006 * mouseSwirlMix * MOUSE_INTERACTION_MULT;
+          const swirl = proximity * 0.00008 * mouseSwirlMix * MOUSE_INTERACTION_MULT;
           p.vx += dmx * force + dmy * swirl;
           p.vy += dmy * force + (-dmx) * swirl;
         }
@@ -719,11 +722,11 @@ function initHeroCanvas2D() {
       for (let i = 0; i < heroRmsData.length; i++) { const v = (heroRmsData[i] - 128) / 128; sum += v * v; }
       const rms = Math.sqrt(sum / heroRmsData.length);
       const target = Math.min(1, rms * 10);
-      audioIntensity += ((target > audioIntensity ? 0.25 : 0.06) * (target - audioIntensity));
-      rmsSmooth += (target - rmsSmooth) * 0.008;
+      audioIntensity += ((target > audioIntensity ? 0.42 : 0.16) * (target - audioIntensity));
+      rmsSmooth += (target - rmsSmooth) * 0.018;
       const now = performance.now();
       if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) { spawnRipple(); lastRippleTime = now; }
-    } else { audioIntensity += (0 - audioIntensity) * 0.02; rmsSmooth = 0; }
+    } else { audioIntensity += (0 - audioIntensity) * 0.08; rmsSmooth = 0; }
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       if (p.age !== undefined) p.age++;
@@ -731,7 +734,7 @@ function initHeroCanvas2D() {
     }
     const fillRatio2d = Math.min(1, particles.length / 2000);
     const audioRate2d = 0.15 + 0.4 * (1 - fillRatio2d);
-    const spawnRate = audioIntensity > 0.01 ? audioRate2d : 0.15;
+    const spawnRate = audioIntensity > 0.01 ? audioRate2d * 2 : 0.15;
     if (particles.length < 2000 && Math.random() < spawnRate) {
       particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120 });
     }
@@ -758,7 +761,7 @@ function initHeroCanvas2D() {
       { const dcx = p.x - btnCX, dcy = p.y - btnCY, dist = Math.sqrt(dcx * dcx + dcy * dcy) || 1, swirlRadius = Math.max(w, h) * 0.6, proximity = Math.max(0, 1 - dist / swirlRadius);
         if (audioIntensity > 0.01 && proximity > 0) { const nx = dcx / dist, ny = dcy / dist; p.vx += -ny * audioIntensity * proximity * 0.04; p.vy += nx * audioIntensity * proximity * 0.04; const pull = audioIntensity * proximity * 0.012; p.vx -= nx * pull; p.vy -= ny * pull; const jit = react * 0.25 * audioIntensity; p.vx += (Math.random() - 0.5) * jit; p.vy += (Math.random() - 0.5) * jit; }
         if (audioIntensity < 0.5 && audioIntensity > 0.001 && !heroAudioPlaying && dist > 1) { const nx = dcx / dist, ny = dcy / dist; p.vx += nx * (0.5 - audioIntensity) * 0.008; p.vy += ny * (0.5 - audioIntensity) * 0.008; } }
-      if (!listenBtn || !listenBtn.classList.contains('playing')) { const dmx = mx - p.x, dmy = my - p.y, d2 = dmx * dmx + dmy * dmy; if (d2 < 122500) { const mdist = Math.sqrt(d2), proximity = 1 - mdist / 350; p.vx += dmx * proximity * 0.00012 + dmy * proximity * 0.00015; p.vy += dmy * proximity * 0.00012 + (-dmx) * proximity * 0.00015; } }
+      if (!listenBtn || !listenBtn.classList.contains('playing')) { const dmx = mx - p.x, dmy = my - p.y, d2 = dmx * dmx + dmy * dmy; if (d2 < 122500) { const mdist = Math.sqrt(d2), proximity = 1 - mdist / 350; p.vx += dmx * proximity * 0.00012 * MOUSE_INTERACTION_MULT + dmy * proximity * 0.00015 * MOUSE_INTERACTION_MULT; p.vy += dmy * proximity * 0.00012 * MOUSE_INTERACTION_MULT + (-dmx) * proximity * 0.00015 * MOUSE_INTERACTION_MULT; } }
       p.vx *= 0.985; p.vy *= 0.985;
       if (p.x < 0) p.x = w; if (p.x > w) p.x = 0; if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
     }
