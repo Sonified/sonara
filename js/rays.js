@@ -25,9 +25,9 @@
   let rafId = null;
 
   canvas.style.opacity = '0';
-  if (isMobileView) canvas.style.display = 'none';
 
   const gl = isMobileView ? null : canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false });
+  const shimmerCtx = isMobileView ? canvas.getContext('2d') : null;
   if (!gl && !isMobileView) return;
   if (gl) {
     gl.clearColor(0, 0, 0, 0);
@@ -160,6 +160,9 @@
       textCanvas.width = w * dpr;
       textCanvas.height = h * dpr;
       tc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    if (shimmerCtx) {
+      shimmerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     particleCanvas.width = w * dpr;
     particleCanvas.height = h * dpr;
@@ -349,9 +352,28 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
+    if (isMobileView && shimmerCtx) {
+      // Render shimmer brightness directly to canvas (no WebGL rays)
+      shimmerCtx.clearRect(0, 0, w, h);
+      if (breath > 0) {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const accentColor = rootStyle.getPropertyValue('--accent').trim() || '#d4a843';
+        const shimmer = shimmerCtx.createRadialGradient(maskX, lightY, 0, maskX, lightY, textW * 0.5);
+        shimmer.addColorStop(0, accentColor);
+        shimmer.addColorStop(0.4, accentColor.replace(')', ', 0.3)').replace('rgb(', 'rgba('));
+        shimmer.addColorStop(1, 'rgba(0,0,0,0)');
+        shimmerCtx.globalAlpha = breath * 0.35;
+        shimmerCtx.globalCompositeOperation = 'screen';
+        shimmerCtx.fillStyle = shimmer;
+        shimmerCtx.fillRect(0, 0, w, h);
+        shimmerCtx.globalAlpha = 1;
+        shimmerCtx.globalCompositeOperation = 'source-over';
+      }
+    }
+
     if (!raysReady && (isMobileView || breath > 0.01)) {
       raysReady = true;
-      canvas.style.opacity = isMobileView ? '0' : '1';
+      canvas.style.opacity = '1';
       particleCanvas.style.opacity = '1';
     }
 
