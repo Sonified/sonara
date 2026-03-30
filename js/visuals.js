@@ -1205,11 +1205,12 @@ function initHeroCanvas() {
   // --- Persistent connection data structures ---
   const connFade = new Map();
   const grid = new Map();
-  const framePairs = new Set();
   const CONN_FADE_IN = 0.04;
   const CONN_FADE_OUT = 0.025;
   let connSearchFrame = 0;
+  let connSearchEpoch = 0;   // incremented each search; entries stamped with this
   let neighborCount = new Uint8Array(BUFFER_CAP);
+  const toDeleteBuf = new Uint32Array(4096);  // reusable buffer for fade-out deletions
 
   let nextPid = 0;
 
@@ -1261,7 +1262,7 @@ function initHeroCanvas() {
   function init() {
     connFade.clear();
     grid.clear();
-    framePairs.clear();
+    connSearchEpoch = 0;
     const initialParticleCount = getSeedCount();
 
     if (GPU_PHYSICS) {
@@ -1634,7 +1635,7 @@ function initHeroCanvas() {
         LINE_BASE * 0.2 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS
       ];
 
-      framePairs.clear();
+      connSearchEpoch++;
 
     for (const [key, cell] of grid) {
       const gx = key % cols, gy = (key / cols) | 0;
@@ -1663,15 +1664,15 @@ function initHeroCanvas() {
                 const targetAlpha = lineAlphas[bucket] * edgeFade;
                 const pidA = a.pid, pidB = b.pid;
                 const ck = pidA < pidB ? pidA * 65536 + pidB : pidB * 65536 + pidA;
-                framePairs.add(ck);
                 let entry = connFade.get(ck);
                 if (!entry) {
-                  entry = { alpha: 0, target: targetAlpha, a, b };
+                  entry = { alpha: 0, target: targetAlpha, a, b, epoch: connSearchEpoch };
                   connFade.set(ck, entry);
                 } else {
                   entry.target = targetAlpha;
                   entry.a = a;
                   entry.b = b;
+                  entry.epoch = connSearchEpoch;
                 }
                 connCount[ai]++;
                 connCount[bi]++;
@@ -1686,18 +1687,18 @@ function initHeroCanvas() {
     // --- Update fade map (runs EVERY frame for smooth animation) ---
     lineIntensity += (brightnessLevel - lineIntensity) * 0.05;
     let lineIdx = 0;
-    const toDelete = [];
+    let toDeleteCount = 0;
     for (const [ck, entry] of connFade) {
       if (entry.a.dead || entry.b.dead) {
         entry.target = 0;
       }
-      if (doConnSearch && !framePairs.has(ck)) {
+      if (doConnSearch && entry.epoch !== connSearchEpoch) {
         entry.target = 0;
       }
       const rate = entry.target > entry.alpha ? CONN_FADE_IN : CONN_FADE_OUT;
       entry.alpha += (entry.target - entry.alpha) * rate;
       if (entry.alpha < 0.001 && entry.target === 0) {
-        toDelete.push(ck);
+        toDeleteBuf[toDeleteCount++] = ck;
         continue;
       }
       if (lineIdx < MAX_LINES * LFLOATS) {
@@ -1710,7 +1711,7 @@ function initHeroCanvas() {
         lineData[lineIdx++] = entry.alpha;
       }
     }
-    for (const ck of toDelete) connFade.delete(ck);
+    for (let d = 0; d < toDeleteCount; d++) connFade.delete(toDeleteBuf[d]);
     const lineVertCount = lineIdx / 3;
 
     // ==================================================================
