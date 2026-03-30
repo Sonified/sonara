@@ -1476,11 +1476,15 @@ function initHeroCanvas() {
         const off = i * FPP;
         const life = cpuReadback[off + 9];
         const p = cpuParticles[i];
-        p.wrapped = false;
         const newX = cpuReadback[off];
         const newY = cpuReadback[off + 1];
         if (!p.dead && (Math.abs(newX - p.x) > halfW || Math.abs(newY - p.y) > halfH)) {
-          p.wrapped = true;
+          const pid = p.pid;
+          for (const [ck] of connFade) {
+            if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
+              connFade.delete(ck);
+            }
+          }
         }
         p.x = newX;
         p.y = newY;
@@ -1663,9 +1667,8 @@ function initHeroCanvas() {
     let lineIdx = 0;
     const toDelete = [];
     for (const [ck, entry] of connFade) {
-      if (entry.a.wrapped || entry.b.wrapped || entry.a.dead || entry.b.dead) {
-        toDelete.push(ck);
-        continue;
+      if (entry.a.dead || entry.b.dead) {
+        entry.target = 0;
       }
       if (doConnSearch && !framePairs.has(ck)) {
         entry.target = 0;
@@ -1697,7 +1700,6 @@ function initHeroCanvas() {
       let pIdx = 0;
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
-        p.wrapped = false;
         const wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5;
         const fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1;
         const react = p.reactivity || 0;
@@ -1776,7 +1778,12 @@ function initHeroCanvas() {
         if (p.y < 0) { p.y = 0; p.x = w - p.x; p.vy = Math.abs(p.vy); wrapped = true; }
         else if (p.y > h) { p.y = h; p.x = w - p.x; p.vy = -Math.abs(p.vy); wrapped = true; }
         if (wrapped) {
-          p.wrapped = true;
+          const pid = p.pid;
+          for (const [ck] of connFade) {
+            if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
+              connFade.delete(ck);
+            }
+          }
         }
       }
       activeCount = particles.length;
