@@ -2306,7 +2306,7 @@ footer {
 
 @media (max-width: 768px) {
   .section {
-    height: auto;
+    height: 100vh;
     min-height: 100vh;
   }
 
