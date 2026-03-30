@@ -1213,9 +1213,13 @@ function initHeroCanvas() {
   let neighborCount = new Uint8Array(BUFFER_CAP);
 
   let nextPid = 0;
+  const PID_MAX = 30000; // keep pid * 65536 + pid well within SMI range (2^30)
 
   function resize() {
     const dpr = window.devicePixelRatio > 1 ? 1.5 : 1;
+    // Clear inline styles so CSS (width/height: 100%) drives layout
+    canvas.style.width = '';
+    canvas.style.height = '';
     w = canvas.width = canvas.offsetWidth * dpr;
     h = canvas.height = canvas.offsetHeight * dpr;
     canvas.style.width = canvas.offsetWidth + 'px';
@@ -1255,7 +1259,7 @@ function initHeroCanvas() {
     const byteOff = slot * STRIDE;
     gl.bindBuffer(gl.ARRAY_BUFFER, tfBuf[tfCurrent]);
     gl.bufferSubData(gl.ARRAY_BUFFER, byteOff, slotBuf);
-    pids[slot] = nextPid++;
+    pids[slot] = nextPid = (nextPid + 1) % PID_MAX;
   }
 
   // ─── init ────────────────────────────────────────────────────────────
@@ -1289,7 +1293,7 @@ function initHeroCanvas() {
         initData[off + 13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
         initData[off + 14] = 0;
         initData[off + 15] = 0;
-        pids[i] = nextPid++;
+        pids[i] = nextPid = (nextPid + 1) % PID_MAX;
       }
       for (let i = initialParticleCount; i < BUFFER_CAP; i++) {
         initData[i * FPP + 9] = -999;
@@ -1304,7 +1308,7 @@ function initHeroCanvas() {
       particles = [];
       for (let i = 0; i < initialParticleCount; i++) {
         particles.push({
-          pid: nextPid++,
+          pid: nextPid = (nextPid + 1) % PID_MAX,
           x: Math.random() * w,
           y: Math.random() * h,
           vx: (Math.random() - 0.5) * 0.4,
@@ -1564,7 +1568,7 @@ function initHeroCanvas() {
       const spawnRate = activityLevel > 0.01 ? audioRate * 2 : 0.15;
       if (particles.length < MAX_PARTICLES && Math.random() < spawnRate) {
         particles.push({
-          pid: nextPid++,
+          pid: nextPid = (nextPid + 1) % PID_MAX,
           x: Math.random() * w, y: Math.random() * h,
           vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
           r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
@@ -1614,7 +1618,7 @@ function initHeroCanvas() {
       // Build grid
       const CELL = CONN_REACH;
       const cols = Math.ceil(w / CELL) + 1;
-      for (const cell of grid.values()) cell.length = 0;
+      grid.clear();
       for (let i = 0; i < pCount; i++) {
         if (GPU_PHYSICS && pSource[i].dead) continue;
         const p = pSource[i];
@@ -1697,7 +1701,7 @@ function initHeroCanvas() {
       }
       const rate = entry.target > entry.alpha ? CONN_FADE_IN : CONN_FADE_OUT;
       entry.alpha += (entry.target - entry.alpha) * rate;
-      if (entry.alpha < 0.001 && entry.target === 0) {
+      if (entry.alpha < 0.003 && entry.target === 0) {
         toDelete.push(ck);
         continue;
       }
@@ -1893,6 +1897,7 @@ function initHeroCanvas() {
         burstStat.statValueEl.textContent = `${burstCount}`;
         totalStat.statValueEl.textContent = `${aliveCount}`;
         highWaterEl.textContent = GPU_PHYSICS ? `HW:${highWater}` : '';
+        console.log(`grid:${grid.size} conn:${connFade.size} particles:${GPU_PHYSICS ? highWater : particles.length} pid:${nextPid}`);
       }
     }
   }
@@ -1937,7 +1942,7 @@ function initHeroCanvas() {
         const speed = 0.3 + Math.random() * 0.6;
         const baseAlpha = 0.3 + Math.random() * 0.4;
         particles.push({
-          pid: nextPid++,
+          pid: nextPid = (nextPid + 1) % PID_MAX,
           x: cx + (Math.random() - 0.5) * 50,
           y: cy + (Math.random() - 0.5) * 50,
           vx: Math.cos(angle) * speed,
