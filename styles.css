@@ -411,7 +411,8 @@ a:hover { opacity: 0.7; }
 .listen-btn.fading {
   opacity: 1;
   border-color: rgba(212, 168, 67, 0.35);
-  background: transparent;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.26);
+  transition: box-shadow 0.3s ease;
 }
 
 .listen-btn.fading .listen-ring {
@@ -469,7 +470,7 @@ a:hover { opacity: 0.7; }
 
 /* Now Playing track status — lower right of hero */
 .now-playing {
-  position: absolute;
+  position: fixed;
   bottom: 1rem;
   right: 0.75rem;
   z-index: 3;
@@ -484,13 +485,13 @@ a:hover { opacity: 0.7; }
   border-radius: 4px;
   opacity: 0;
   filter: blur(2px);
-  transition: opacity 3s ease, filter 3s ease;
+  transition: filter 3s ease;
   pointer-events: none;
 }
 
-#hero:has(.listen-btn.playing) .now-playing {
-  opacity: 1;
+.now-playing.visible {
   filter: blur(0);
+  transition: filter 3s ease;
   transition-delay: 2.5s;
 }
 
@@ -606,12 +607,12 @@ a:hover { opacity: 0.7; }
   text-transform: uppercase;
   position: relative;
   z-index: 0;
-  color: rgba(228, 188, 88, 0.96);
+  color: rgba(228, 188, 88, 0.56);
   text-shadow: 0 0 8px rgba(212, 168, 67, 0.14);
   opacity: 0;
   filter: blur(1.5px);
-  transition: opacity 1.6s ease, filter 1.6s ease;
-  will-change: opacity, filter, color, text-shadow;
+  transition: opacity 0.8s ease, filter 0.8s ease;
+  will-change: opacity, filter;
 }
 
 .scroll-hint.visible .scroll-hint-text {
@@ -635,7 +636,7 @@ a:hover { opacity: 0.7; }
 }
 
 .scroll-hint.pulsing.show-copy .scroll-hint-text {
-  animation: hintTextGlow 1.7s ease-in-out infinite;
+  /* no pulse — flat text */
 }
 
 .scroll-hint.pulsing .section-down-chevron {
@@ -685,12 +686,18 @@ a:hover { opacity: 0.7; }
 .scroll-hint .section-down-chevron {
   display: block;
   font-size: 2rem;
-  opacity: 1;
+  margin-top: 12rem;
+  opacity: 0;
   transform: scale(1);
   filter: brightness(1.08) saturate(1);
   color: rgba(228, 188, 88, 0.96);
   text-shadow: 0 0 10px rgba(212, 168, 67, 0.18);
+  transition: opacity 2s ease;
   will-change: opacity, transform, filter, text-shadow;
+}
+
+.scroll-hint.show-chevron .section-down-chevron {
+  opacity: 1;
 }
 
 @keyframes hintPulse {

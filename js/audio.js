@@ -236,6 +236,8 @@ for (let i = heroFiles.length - 1; i > 0; i--) {
   [heroFiles[i], heroFiles[j]] = [heroFiles[j], heroFiles[i]];
 }
 let heroFileIdx = 0;
+let heroStartTime = 0;
+let heroBufDuration = 0;
 
 async function heroSound(ac, master) {
   const nodes = [];
@@ -254,6 +256,8 @@ async function heroSound(ac, master) {
   src.connect(g);
   g.connect(master);
   src.start();
+  heroStartTime = now;
+  heroBufDuration = buf.duration;
   nodes.push(src);
   gains.push(g);
   return { nodes, gains };
@@ -807,6 +811,12 @@ export function getStemAnalyser() {
 
 export function getHeroAnalyser() {
   return heroAnalyser;
+}
+
+export function getHeroProgress() {
+  if (!heroBufDuration || !ctx) return 0;
+  const elapsed = ctx.currentTime - heroStartTime;
+  return (elapsed % heroBufDuration) / heroBufDuration;
 }
 
 export function getCitizenAnalyser() {

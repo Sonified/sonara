@@ -3,7 +3,7 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser } from './audio.js?v=8';
+import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress } from './audio.js?v=8';
 import { initVisuals } from './visuals.js?v=8';
 
 (function() {
@@ -275,7 +275,6 @@ import { initVisuals } from './visuals.js?v=8';
     const cleanup = () => {
       btn.classList.remove('playing', 'fading', 'freeze-pulse');
       btn.style.borderColor = '';
-      btn.style.backgroundColor = '';
       btn.style.boxShadow = '';
       fadingButtons.delete(btn);
       if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.remove('pulsing');
@@ -287,7 +286,6 @@ import { initVisuals } from './visuals.js?v=8';
   function autoEnd(btn, soundId) {
     btn.classList.remove('playing', 'fading', 'freeze-pulse');
     btn.style.borderColor = '';
-    btn.style.backgroundColor = '';
     btn.style.boxShadow = '';
     fadingButtons.delete(btn);
     autoEndTimers.delete(btn);
@@ -316,7 +314,7 @@ import { initVisuals } from './visuals.js?v=8';
   let heroHintRevealTimer = null;
   let heroHintPulseTimer = null;
   let heroHintCopyTimer = null;
-  const HERO_HINT_GAP_FRACTION = 0.28;
+  const HERO_HINT_GAP_FRACTION = 0.15;
 
   function updateHeroHintPosition() {
     if (!scrollHint || !heroSection || !heroListenBtn) return;
@@ -399,11 +397,17 @@ import { initVisuals } from './visuals.js?v=8';
             if (scrollHint.dataset.dismissed === '1') return;
             scrollHint.classList.add('visible');
             delete scrollHint.dataset.pendingReveal;
+            // Show chevron 5s after text appears
             heroHintPulseTimer = setTimeout(() => {
               heroHintPulseTimer = null;
               if (scrollHint.dataset.dismissed === '1') return;
-              scrollHint.classList.add('pulsing');
-            }, 3000);
+              scrollHint.classList.add('show-chevron');
+              // Start chevron pulse after it fades in
+              setTimeout(() => {
+                if (scrollHint.dataset.dismissed === '1') return;
+                scrollHint.classList.add('pulsing');
+              }, 3000);
+            }, 5000);
           }, 4000);
         }
       }
@@ -446,6 +450,7 @@ import { initVisuals } from './visuals.js?v=8';
   if (heroBtn) {
     const heroRmsData = new Uint8Array(128);
     let smoothAlpha = 0;
+    let lastPPct = '0';
     (function heroShimmer() {
       const analyser = getHeroAnalyser();
       if (analyser && heroBtn.classList.contains('playing')) {
@@ -457,12 +462,22 @@ import { initVisuals } from './visuals.js?v=8';
         }
         const rms = Math.sqrt(sum / heroRmsData.length);
         const intensity = Math.min(1, rms * 5);
-        const target = 0.07 + intensity * 0.35;
-        smoothAlpha += (target - smoothAlpha) * 0.15;
-        heroBtn.style.background = `rgba(212, 168, 67, ${smoothAlpha})`;
+        const target = 0.07 + intensity * 0.55;
+        const rate = target > smoothAlpha ? 0.025 : 0.025;
+        smoothAlpha += (target - smoothAlpha) * rate;
+        const progress = getHeroProgress();
+        const endFade = progress > 0.97 ? (1 - progress) / 0.03 : 1;
+        const alpha = smoothAlpha * endFade;
+        lastPPct = (progress * 100).toFixed(1);
+        heroBtn.style.background = `linear-gradient(to right, rgba(212,168,67,${alpha}) ${lastPPct}%, transparent ${lastPPct}%), rgba(6,6,8,0.5)`;
       } else {
-        smoothAlpha = 0;
-        heroBtn.style.background = '';
+        smoothAlpha *= 0.85;
+        if (smoothAlpha < 0.005) {
+          smoothAlpha = 0;
+          heroBtn.style.background = '';
+        } else {
+          heroBtn.style.background = `linear-gradient(to right, rgba(212,168,67,${smoothAlpha}) ${lastPPct}%, transparent ${lastPPct}%), rgba(6,6,8,0.5)`;
+        }
       }
       requestAnimationFrame(heroShimmer);
     })();
@@ -505,6 +520,69 @@ import { initVisuals } from './visuals.js?v=8';
     }, { threshold: 0.8 });
     const hero = document.getElementById('hero');
     if (hero) hintObs.observe(hero);
+  }
+
+  // ===== Now-playing: fade based on scroll + playing state =====
+  const nowPlaying = document.querySelector('.now-playing');
+  if (nowPlaying) {
+    const heroListenBtnNP = document.querySelector('#hero .listen-btn');
+    let heroRatio = 1;
+    let isPlaying = false;
+    let introProgress = 0; // 0→1 over ~3s after 2.5s delay
+    let introRaf = null;
+    let introStart = 0;
+    const INTRO_DELAY = 2500;
+    const INTRO_DURATION = 3000;
+
+    function runIntro(ts) {
+      if (!introStart) introStart = ts;
+      const elapsed = ts - introStart;
+      if (elapsed < INTRO_DELAY) {
+        introProgress = 0;
+      } else {
+        introProgress = Math.min(1, (elapsed - INTRO_DELAY) / INTRO_DURATION);
+      }
+      updateNowPlaying();
+      if (introProgress < 1 && isPlaying) introRaf = requestAnimationFrame(runIntro);
+    }
+
+    function updateNowPlaying() {
+      if (!isPlaying) {
+        nowPlaying.classList.remove('visible');
+        nowPlaying.style.opacity = '0';
+        introProgress = 0;
+        introStart = 0;
+        if (introRaf) { cancelAnimationFrame(introRaf); introRaf = null; }
+        return;
+      }
+      nowPlaying.classList.add('visible');
+      const scrollFade = Math.max(0, Math.min(1, (heroRatio - 0.8) / 0.2));
+      nowPlaying.style.opacity = Math.min(introProgress, scrollFade);
+    }
+
+    // Fire at many thresholds for smooth fading
+    const thresholds = [];
+    for (let i = 0; i <= 20; i++) thresholds.push(i / 20);
+    const npObs = new IntersectionObserver((entries) => {
+      entries.forEach(e => { heroRatio = e.intersectionRatio; });
+      updateNowPlaying();
+    }, { threshold: thresholds });
+    const heroEl = document.getElementById('hero');
+    if (heroEl) npObs.observe(heroEl);
+
+    if (heroListenBtnNP) {
+      const btnObs = new MutationObserver(() => {
+        const wasPlaying = isPlaying;
+        isPlaying = heroListenBtnNP.classList.contains('playing');
+        if (isPlaying && !wasPlaying) {
+          introProgress = 0;
+          introStart = 0;
+          introRaf = requestAnimationFrame(runIntro);
+        }
+        updateNowPlaying();
+      });
+      btnObs.observe(heroListenBtnNP, { attributes: true, attributeFilter: ['class'] });
+    }
   }
 
   // ===== Section Down Cues =====

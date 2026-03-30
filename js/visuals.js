@@ -586,6 +586,7 @@ function initHeroCanvas() {
   let lastRippleTime = 0;
   let rippleClickTime = 0;
   const RIPPLE_BURST_DURATION = 10000;
+  let rippleFirstPlay = true;
 
   function spawnRipple() {
     if (!listenBtn) return;
@@ -603,12 +604,16 @@ function initHeroCanvas() {
   }
   if (listenBtn) {
     const mo = new MutationObserver(() => {
+      const wasPlaying = heroAudioPlaying;
       heroAudioPlaying = listenBtn.classList.contains('playing');
+      if (wasPlaying && !heroAudioPlaying) rippleFirstPlay = false;
     });
     mo.observe(listenBtn, { attributes: true, attributeFilter: ['class'] });
     listenBtn.addEventListener('click', () => {
-      rippleClickTime = performance.now();
-      spawnRipple();
+      if (rippleFirstPlay) {
+        rippleClickTime = performance.now();
+        spawnRipple();
+      }
     });
   }
 
@@ -1260,7 +1265,7 @@ function initHeroCanvas() {
       audioTransient += (transientTarget - audioTransient) * spinTransientRate;
       rmsSmooth += (target - rmsSmooth) * 0.018;
       const rippleAge = now - rippleClickTime;
-      if (rippleClickTime > 0 && rippleAge < RIPPLE_BURST_DURATION) {
+      if (rippleFirstPlay && rippleClickTime > 0 && rippleAge < RIPPLE_BURST_DURATION) {
         const decay = 1 - rippleAge / RIPPLE_BURST_DURATION;
         const interval = 800 + (1 - decay) * 3200;
         if (target > rmsSmooth + 0.35 && now - lastRippleTime > interval) {
@@ -1944,7 +1949,7 @@ function initHeroCanvas2D() {
       audioTransient += ((target > audioTransient ? SPIN_ATTACK : SPIN_RELEASE) * (target - audioTransient));
       rmsSmooth += (target - rmsSmooth) * 0.018;
       const now = performance.now();
-      if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) { spawnRipple(); lastRippleTime = now; }
+      if (rippleFirstPlay && target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) { spawnRipple(); lastRippleTime = now; }
     } else {
       brightnessIntensity += (0 - brightnessIntensity) * BRIGHTNESS_RELEASE;
       brightnessTransient += (0 - brightnessTransient) * BRIGHTNESS_RELEASE;
