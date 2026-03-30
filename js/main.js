@@ -747,6 +747,21 @@ import { initVisuals } from './visuals.js?v=8';
   setTimeout(matchVisualHeights, 100);
   window.addEventListener('resize', matchVisualHeights);
 
+  // Disable scroll-snap during resize to prevent mandatory snap from
+  // jumping back to hero when the viewport width changes.
+  let resizeSnapTimer = null;
+  const htmlEl = document.documentElement;
+  window.addEventListener('resize', () => {
+    if (!resizeSnapTimer) {
+      htmlEl.style.scrollSnapType = 'none';
+    }
+    clearTimeout(resizeSnapTimer);
+    resizeSnapTimer = setTimeout(() => {
+      htmlEl.style.scrollSnapType = '';
+      resizeSnapTimer = null;
+    }, 200);
+  });
+
   // Toolbar buttons
   const randomizeBtn = document.getElementById('seq-randomize');
   if (randomizeBtn) {
