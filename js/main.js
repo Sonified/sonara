@@ -4,7 +4,7 @@
  */
 
 import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress } from './audio.js?v=8';
-import { initVisuals } from './visuals.js?v=10';
+import { initVisuals } from './visuals.js?v=13';
 
 (function() {
   'use strict';

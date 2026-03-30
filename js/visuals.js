@@ -80,7 +80,7 @@ const HERO_SOFT_WHITE_TINT = { r: 1.0, g: 0.97, b: 0.93 };
 let RIPPLE_SPEED_BASE = +(localStorage.getItem('sonara_rippleBase') || HERO_DEBUG_DEFAULTS.rippleBase);
 let RIPPLE_SPEED_VAR = +(localStorage.getItem('sonara_rippleVariance') || HERO_DEBUG_DEFAULTS.rippleVariance);
 let RIPPLE_INNER_RADIUS = +(localStorage.getItem('sonara_rippleInnerRadius') || HERO_DEBUG_DEFAULTS.rippleInnerRadius);
-let SHOW_RIPPLE_RADIUS = localStorage.getItem('sonara_showRippleRadius') !== '0';
+let SHOW_RIPPLE_RADIUS = localStorage.getItem('sonara_showRippleRadius') === '1';
 const legacyRmsAttack = localStorage.getItem('sonara_rmsAttack');
 const legacyRmsRelease = localStorage.getItem('sonara_rmsRelease');
 let BRIGHTNESS_ATTACK = +(localStorage.getItem('sonara_brightnessAttack') || legacyRmsAttack || HERO_DEBUG_DEFAULTS.brightnessAttack);
@@ -1183,10 +1183,17 @@ function initHeroCanvas() {
 
   // --- Persistent connection data structures ---
   const connFade = new Map();
+  const connByPid = new Map();   // pid → Set<ck> — reverse index for O(1) wrap cleanup
   const grid = new Map();
   const framePairs = new Set();
   const CONN_FADE_IN = 0.04;
   const CONN_FADE_OUT = 0.025;
+  function deleteConn(ck) {
+    connFade.delete(ck);
+    const pidA = (ck / 65536) | 0, pidB = ck % 65536;
+    const sA = connByPid.get(pidA); if (sA) { sA.delete(ck); if (sA.size === 0) connByPid.delete(pidA); }
+    const sB = connByPid.get(pidB); if (sB) { sB.delete(ck); if (sB.size === 0) connByPid.delete(pidB); }
+  }
   let connSearchFrame = 0;
   let neighborCount = new Uint8Array(BUFFER_CAP);
 
@@ -1239,6 +1246,7 @@ function initHeroCanvas() {
   // ─── init ────────────────────────────────────────────────────────────
   function init() {
     connFade.clear();
+    connByPid.clear();
     grid.clear();
     framePairs.clear();
     const initialParticleCount = getSeedCount();
@@ -1480,11 +1488,8 @@ function initHeroCanvas() {
         const newY = cpuReadback[off + 1];
         if (!p.dead && (Math.abs(newX - p.x) > halfW || Math.abs(newY - p.y) > halfH)) {
           const pid = p.pid;
-          for (const [ck] of connFade) {
-            if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
-              connFade.delete(ck);
-            }
-          }
+          const pidConns = connByPid.get(pid);
+          if (pidConns) { for (const ck of [...pidConns]) deleteConn(ck); }
         }
         p.x = newX;
         p.y = newY;
@@ -1647,6 +1652,8 @@ function initHeroCanvas() {
                 if (!entry) {
                   entry = { alpha: 0, target: targetAlpha, a, b };
                   connFade.set(ck, entry);
+                  let s = connByPid.get(pidA); if (!s) { s = new Set(); connByPid.set(pidA, s); } s.add(ck);
+                  s = connByPid.get(pidB); if (!s) { s = new Set(); connByPid.set(pidB, s); } s.add(ck);
                 } else {
                   entry.target = targetAlpha;
                   entry.a = a;
@@ -1689,7 +1696,7 @@ function initHeroCanvas() {
         lineData[lineIdx++] = entry.alpha;
       }
     }
-    for (const ck of toDelete) connFade.delete(ck);
+    for (const ck of toDelete) deleteConn(ck);
     const lineVertCount = lineIdx / 3;
 
     // ==================================================================
@@ -1778,12 +1785,8 @@ function initHeroCanvas() {
         if (p.y < 0) { p.y = 0; p.x = w - p.x; p.vy = Math.abs(p.vy); wrapped = true; }
         else if (p.y > h) { p.y = h; p.x = w - p.x; p.vy = -Math.abs(p.vy); wrapped = true; }
         if (wrapped) {
-          const pid = p.pid;
-          for (const [ck] of connFade) {
-            if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
-              connFade.delete(ck);
-            }
-          }
+          const pidConns = connByPid.get(p.pid);
+          if (pidConns) { for (const ck of [...pidConns]) deleteConn(ck); }
         }
       }
       activeCount = particles.length;
