@@ -58,6 +58,7 @@ const HERO_DEBUG_DEFAULTS = {
   connDist: 170,
   maxConn: 3,
   connSkip: 5,
+  whiteParticlePct: 15,
   swirlForce: 0.065,
   pullForce: 0.012,
   friction: 0.98,
@@ -78,6 +79,13 @@ let SPIN_RELEASE = +(localStorage.getItem('sonara_spinRelease') || legacyRmsRele
 let SWIRL_FORCE = +(localStorage.getItem('sonara_swirlForce') || HERO_DEBUG_DEFAULTS.swirlForce);
 let PULL_FORCE = +(localStorage.getItem('sonara_pullForce') || HERO_DEBUG_DEFAULTS.pullForce);
 let FRICTION = +(localStorage.getItem('sonara_friction') || HERO_DEBUG_DEFAULTS.friction);
+function clampWhiteParticlePct(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return HERO_DEBUG_DEFAULTS.whiteParticlePct;
+  return Math.max(0, Math.min(30, Math.round(num / 5) * 5));
+}
+let WHITE_PARTICLE_PERCENT = clampWhiteParticlePct(localStorage.getItem('sonara_whiteParticlePct') ?? HERO_DEBUG_DEFAULTS.whiteParticlePct);
+const getWhiteParticleChance = () => WHITE_PARTICLE_PERCENT / 100;
 
 function copyText(text) {
   if (navigator.clipboard?.writeText) {
@@ -166,6 +174,7 @@ function initHeroCanvas() {
     connDist: CONN_REACH,
     maxConn: MAX_CONN,
     connSkip: CONN_SEARCH_INTERVAL,
+    whiteParticlePct: WHITE_PARTICLE_PERCENT,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
     friction: Number(FRICTION.toFixed(3)),
@@ -200,8 +209,11 @@ function initHeroCanvas() {
   debugTopRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_TOP_ROW_GAP}px`;
   const debugSecondRow = document.createElement('div');
   debugSecondRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
+  const debugThirdRow = document.createElement('div');
+  debugThirdRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   debugBar.appendChild(debugTopRow);
   debugBar.appendChild(debugSecondRow);
+  debugBar.appendChild(debugThirdRow);
   const debugToggleBtn = document.createElement('button');
   debugToggleBtn.type = 'button';
   debugToggleBtn.style.cssText = DEBUG_TOGGLE_BUTTON_STYLE;
@@ -354,6 +366,22 @@ function initHeroCanvas() {
     }
     sel.addEventListener('change', () => { CONN_SEARCH_INTERVAL = +sel.value; connSearchFrame = 0; localStorage.setItem('sonara_connSkip', CONN_SEARCH_INTERVAL); });
     appendDebugPair(debugTopRow, 'Conn skip:', sel);
+
+    const wpSel = document.createElement('select');
+    wpSel.style.cssText = DEBUG_SELECT_STYLE;
+    for (let i = 0; i <= 30; i += 5) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${i}%${i === HERO_DEBUG_DEFAULTS.whiteParticlePct ? ' ★' : ''}`;
+      if (i === WHITE_PARTICLE_PERCENT) opt.selected = true;
+      wpSel.appendChild(opt);
+    }
+    wpSel.addEventListener('change', () => {
+      WHITE_PARTICLE_PERCENT = clampWhiteParticlePct(wpSel.value);
+      wpSel.value = String(WHITE_PARTICLE_PERCENT);
+      localStorage.setItem('sonara_whiteParticlePct', WHITE_PARTICLE_PERCENT);
+    });
+    appendDebugPair(debugThirdRow, 'White %:', wpSel);
 
   }
 
@@ -1199,7 +1227,7 @@ function initHeroCanvas() {
           phase: Math.random() * Math.PI * 2,
           reactivity: 0.3 + Math.random() * 0.7,
           rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
-          canWhiten: Math.random() < 0.30
+          canWhiten: Math.random() < getWhiteParticleChance()
         });
       }
     }
@@ -1455,7 +1483,7 @@ function initHeroCanvas() {
           r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
           phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120,
           rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
-          canWhiten: Math.random() < 0.30
+          canWhiten: Math.random() < getWhiteParticleChance()
         });
       }
 
@@ -1821,7 +1849,7 @@ function initHeroCanvas() {
           decay: 0.0003 + Math.random() * 0.0007,
           age: 0, fadeIn: 15 + Math.floor(Math.random() * 15),
           rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
-          canWhiten: Math.random() < 0.30
+          canWhiten: Math.random() < getWhiteParticleChance()
         });
       }
     }
@@ -1914,7 +1942,7 @@ function initHeroCanvas2D() {
         vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
         r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
         phase: Math.random() * Math.PI * 2, reactivity: 0.3 + Math.random() * 0.7,
-        canWhiten: Math.random() < 0.30
+        canWhiten: Math.random() < getWhiteParticleChance()
       });
     }
   }
@@ -1970,7 +1998,7 @@ function initHeroCanvas2D() {
     const audioRate2d = 0.15 + 0.4 * (1 - fillRatio2d);
     const spawnRate = activityLevel > 0.01 ? audioRate2d * 2 : 0.15;
     if (particles.length < 2000 && Math.random() < spawnRate) {
-      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120, canWhiten: Math.random() < 0.30 });
+      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120, canWhiten: Math.random() < getWhiteParticleChance() });
     }
     const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
     for (let i = 0; i < particles.length; i++) { const p = particles[i]; const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols; const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]); }
@@ -2013,7 +2041,7 @@ function initHeroCanvas2D() {
     const cx = (e.clientX - rect.left) * scaleX, cy = (e.clientY - rect.top) * scaleY;
     const count = heroDragging ? 1 : 1 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) { const angle = Math.random() * Math.PI * 2, speed = 0.3 + Math.random() * 0.6, baseAlpha = 0.3 + Math.random() * 0.2;
-      particles.push({ x: cx + (Math.random() - 0.5) * 20, y: cy + (Math.random() - 0.5) * 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r: Math.random() * 2 + 0.5, alpha: baseAlpha, baseAlpha, phase: Math.random() * Math.PI * 2, life: 1, decay: 0.0003 + Math.random() * 0.0007, age: 0, fadeIn: 80 + Math.floor(Math.random() * 80), canWhiten: Math.random() < 0.30 }); }
+      particles.push({ x: cx + (Math.random() - 0.5) * 20, y: cy + (Math.random() - 0.5) * 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r: Math.random() * 2 + 0.5, alpha: baseAlpha, baseAlpha, phase: Math.random() * Math.PI * 2, life: 1, decay: 0.0003 + Math.random() * 0.0007, age: 0, fadeIn: 80 + Math.floor(Math.random() * 80), canWhiten: Math.random() < getWhiteParticleChance() }); }
   }
   heroEl.addEventListener('mousedown', (e) => { heroDragging = true; spawnBurst(e); });
   heroEl.addEventListener('mousemove', (e) => { if (heroDragging) spawnBurst(e); });
