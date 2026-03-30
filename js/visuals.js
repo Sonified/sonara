@@ -10,6 +10,17 @@ const getCitizenAnalyser = typeof audio.getCitizenAnalyser === 'function'
   ? audio.getCitizenAnalyser
   : () => null;
 
+// Fast sine lookup table (256 entries, linear interpolation)
+const SIN_LUT_SIZE = 256;
+const SIN_LUT = new Float32Array(SIN_LUT_SIZE + 1);
+for (let i = 0; i <= SIN_LUT_SIZE; i++) SIN_LUT[i] = Math.sin((i / SIN_LUT_SIZE) * Math.PI * 2);
+const SIN_SCALE = SIN_LUT_SIZE / (Math.PI * 2);
+function fastSin(x) {
+  const t = ((x % 6.283185307179586) + 6.283185307179586) * SIN_SCALE;
+  const i = t | 0;
+  return SIN_LUT[i] + (t - i) * (SIN_LUT[i + 1] - SIN_LUT[i]);
+}
+
 // Unified rAF loop — all canvas draw functions register here
 const drawCallbacks = [];
 function registerDraw(fn) { drawCallbacks.push(fn); }
@@ -1701,7 +1712,7 @@ function initHeroCanvas() {
       const attenuationRadius = Math.max(w, h) * FORCE_RADIUS;
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
-        const wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5;
+        const wave = fastSin(time * 2 + p.phase) * 0.5 + 0.5;
         const fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1;
         const react = p.reactivity || 0;
         const dxB = p.x - btnCX, dyB = p.y - btnCY;
@@ -1712,7 +1723,7 @@ function initHeroCanvas() {
         const radialAttenuation = radialBase * Math.sqrt(radialBase);
         const brightnessLocal = localBrightnessIntensity * radialAttenuation;
         const br = brightnessLocal * react;
-        const audioBoost = br > 0.001 ? br * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3) : 0;
+        const audioBoost = br > 0.001 ? br * (0.8 + fastSin(time * 3.7 + p.phase * 2) * 0.3) : 0;
         const tremble = br > 0.001 ? (Math.random() - 0.5) * 0.12 * br : 0;
         const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * HERO_PARTICLE_BRIGHTNESS);
         const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
@@ -2092,8 +2103,8 @@ function initHeroCanvas2D() {
     const scaleX = w / window.innerWidth, scaleY = h / window.innerHeight, mx = mouseX * scaleX, my = mouseY * scaleY;
     const glowList = [];
     for (let i = 0; i < particles.length; i++) {
-      const p = particles[i], wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5, fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1, react = p.reactivity || 0;
-      const audioBoost = brightnessLevel * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
+      const p = particles[i], wave = fastSin(time * 2 + p.phase) * 0.5 + 0.5, fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1, react = p.reactivity || 0;
+      const audioBoost = brightnessLevel * react * (0.8 + fastSin(time * 3.7 + p.phase * 2) * 0.3);
       const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
       let pr = HERO_GOLD_RGB.r * 255, pg = HERO_GOLD_RGB.g * 255, pb = HERO_GOLD_RGB.b * 255;
