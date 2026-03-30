@@ -59,6 +59,7 @@ const HERO_DEBUG_DEFAULTS = {
   maxConn: 3,
   connSkip: 5,
   whiteParticlePct: 15,
+  whiteBrightnessCap: 60,
   swirlForce: 0.065,
   pullForce: 0.012,
   friction: 0.98,
@@ -66,6 +67,8 @@ const HERO_DEBUG_DEFAULTS = {
 };
 
 const FORCE_RADIUS = 0.64; // default: 0.6 — fraction of canvas size for audio/swirl force reach
+const HERO_GOLD_RGB = { r: 0.831, g: 0.659, b: 0.263 };
+const HERO_SOFT_WHITE_TINT = { r: 1.0, g: 0.97, b: 0.93 };
 let RIPPLE_SPEED_BASE = +(localStorage.getItem('sonara_rippleBase') || HERO_DEBUG_DEFAULTS.rippleBase);
 let RIPPLE_SPEED_VAR = +(localStorage.getItem('sonara_rippleVariance') || HERO_DEBUG_DEFAULTS.rippleVariance);
 let RIPPLE_INNER_RADIUS = +(localStorage.getItem('sonara_rippleInnerRadius') || HERO_DEBUG_DEFAULTS.rippleInnerRadius);
@@ -84,8 +87,22 @@ function clampWhiteParticlePct(value) {
   if (!Number.isFinite(num)) return HERO_DEBUG_DEFAULTS.whiteParticlePct;
   return Math.max(0, Math.min(30, Math.round(num / 5) * 5));
 }
+function clampWhiteBrightnessCap(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return HERO_DEBUG_DEFAULTS.whiteBrightnessCap;
+  return Math.max(40, Math.min(100, Math.round(num / 5) * 5));
+}
 let WHITE_PARTICLE_PERCENT = clampWhiteParticlePct(localStorage.getItem('sonara_whiteParticlePct') ?? HERO_DEBUG_DEFAULTS.whiteParticlePct);
+let WHITE_BRIGHTNESS_CAP = clampWhiteBrightnessCap(localStorage.getItem('sonara_whiteBrightnessCap') ?? HERO_DEBUG_DEFAULTS.whiteBrightnessCap);
 const getWhiteParticleChance = () => WHITE_PARTICLE_PERCENT / 100;
+function getWhiteParticleColor() {
+  const cap = WHITE_BRIGHTNESS_CAP / 100;
+  return {
+    r: HERO_SOFT_WHITE_TINT.r * cap,
+    g: HERO_SOFT_WHITE_TINT.g * cap,
+    b: HERO_SOFT_WHITE_TINT.b * cap,
+  };
+}
 
 function copyText(text) {
   if (navigator.clipboard?.writeText) {
@@ -175,6 +192,7 @@ function initHeroCanvas() {
     maxConn: MAX_CONN,
     connSkip: CONN_SEARCH_INTERVAL,
     whiteParticlePct: WHITE_PARTICLE_PERCENT,
+    whiteBrightnessCap: WHITE_BRIGHTNESS_CAP,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
     friction: Number(FRICTION.toFixed(3)),
@@ -211,6 +229,8 @@ function initHeroCanvas() {
   debugSecondRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   const debugThirdRow = document.createElement('div');
   debugThirdRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
+  const debugConnCountEl = document.createElement('span');
+  debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;white-space:nowrap';
   debugBar.appendChild(debugTopRow);
   debugBar.appendChild(debugSecondRow);
   debugBar.appendChild(debugThirdRow);
@@ -381,7 +401,24 @@ function initHeroCanvas() {
       wpSel.value = String(WHITE_PARTICLE_PERCENT);
       localStorage.setItem('sonara_whiteParticlePct', WHITE_PARTICLE_PERCENT);
     });
+    const wcSel = document.createElement('select');
+    wcSel.style.cssText = DEBUG_SELECT_STYLE;
+    for (let i = 40; i <= 100; i += 5) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${i}%${i === HERO_DEBUG_DEFAULTS.whiteBrightnessCap ? ' ★' : ''}`;
+      if (i === WHITE_BRIGHTNESS_CAP) opt.selected = true;
+      wcSel.appendChild(opt);
+    }
+    wcSel.addEventListener('change', () => {
+      WHITE_BRIGHTNESS_CAP = clampWhiteBrightnessCap(wcSel.value);
+      wcSel.value = String(WHITE_BRIGHTNESS_CAP);
+      localStorage.setItem('sonara_whiteBrightnessCap', WHITE_BRIGHTNESS_CAP);
+    });
+    debugConnCountEl.textContent = 'Active conn: 0';
+    debugThirdRow.appendChild(debugConnCountEl);
     appendDebugPair(debugThirdRow, 'White %:', wpSel);
+    appendDebugPair(debugThirdRow, 'White cap:', wcSel);
 
   }
 
@@ -862,6 +899,7 @@ function initHeroCanvas() {
     in float v_alpha;
     in float v_whiten;
     uniform float u_glowAlpha;
+    uniform vec3 u_whiteColor;
     out vec4 fragColor;
     void main() {
       vec2 center = gl_PointCoord - 0.5;
@@ -874,8 +912,8 @@ function initHeroCanvas() {
       float hasGlow = step(0.15, v_alpha);
       float alpha = coreAlpha * v_alpha + glowFade * u_glowAlpha * v_alpha * hasGlow;
       if (alpha < 0.002) discard;
-      vec3 gold = vec3(0.831, 0.659, 0.263);
-      vec3 col = mix(gold, vec3(0.58, 0.58, 0.62), v_whiten);
+      vec3 gold = vec3(${HERO_GOLD_RGB.r.toFixed(3)}, ${HERO_GOLD_RGB.g.toFixed(3)}, ${HERO_GOLD_RGB.b.toFixed(3)});
+      vec3 col = mix(gold, u_whiteColor, v_whiten);
       fragColor = vec4(col * alpha, alpha);
     }`;
 
@@ -943,6 +981,7 @@ function initHeroCanvas() {
     whiten:     gl.getAttribLocation(particleProg, 'a_whiten'),
     resolution: gl.getUniformLocation(particleProg, 'u_resolution'),
     glowAlpha:  gl.getUniformLocation(particleProg, 'u_glowAlpha'),
+    whiteColor: gl.getUniformLocation(particleProg, 'u_whiteColor'),
   };
 
   const lineProg = linkProgram(LINE_VS, LINE_FS);
@@ -1078,7 +1117,7 @@ function initHeroCanvas() {
   }
 
   // --- Line buffer + VAO (shared) ---
-  const MAX_LINES = 1000000; // TEMP: uncapped to debug connection islands
+  const MAX_LINES = 65000;
   const LFLOATS = 6;
   const lineData = new Float32Array(MAX_LINES * LFLOATS);
   const lineBuf = gl.createBuffer();
@@ -1488,7 +1527,9 @@ function initHeroCanvas() {
       }
 
       // --- Culling ---
-      autoCount = particles.reduce((n, p) => n + (p.life === undefined ? 1 : 0), 0);
+      if (particles.length > THROTTLE_START || (isLocal && debugHudVisible)) {
+        autoCount = particles.reduce((n, p) => n + (p.life === undefined ? 1 : 0), 0);
+      }
       if (autoCount > THROTTLE_START) {
         const range = MAX_PARTICLES - THROTTLE_START;
         const pressure = (autoCount - THROTTLE_START) / range;
@@ -1508,7 +1549,7 @@ function initHeroCanvas() {
         }
       }
 
-      aliveCount = particles.length;
+      if (isLocal && debugHudVisible) aliveCount = particles.length;
     }
 
     // ==================================================================
@@ -1738,11 +1779,13 @@ function initHeroCanvas() {
     }
 
     // Draw particles
+    const whiteParticleColor = getWhiteParticleColor();
     if (GPU_PHYSICS) {
       if (highWater > 0) {
         gl.useProgram(particleProg);
         gl.uniform2f(pLoc.resolution, w, h);
         gl.uniform1f(pLoc.glowAlpha, (0.06 + brightnessLevel * 0.08) * HERO_PARTICLE_BRIGHTNESS);
+        gl.uniform3f(pLoc.whiteColor, whiteParticleColor.r, whiteParticleColor.g, whiteParticleColor.b);
         gl.bindVertexArray(renderVAO[tfCurrent]);
         gl.drawArrays(gl.POINTS, 0, highWater);
       }
@@ -1751,6 +1794,7 @@ function initHeroCanvas() {
         gl.useProgram(particleProg);
         gl.uniform2f(pLoc.resolution, w, h);
         gl.uniform1f(pLoc.glowAlpha, (0.06 + brightnessLevel * 0.08) * HERO_PARTICLE_BRIGHTNESS);
+        gl.uniform3f(pLoc.whiteColor, whiteParticleColor.r, whiteParticleColor.g, whiteParticleColor.b);
         gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, particleData.subarray(0, activeCount * PFLOATS));
         gl.bindVertexArray(cpuRenderVAO);
@@ -1777,16 +1821,15 @@ function initHeroCanvas() {
       }
     }
 
-    // FPS counter
-    fpsFrames++;
-    if (now - fpsLastTime >= 1000) {
-      fpsValue = fpsFrames;
-      fpsFrames = 0;
-      fpsLastTime = now;
-    }
-
-    const burstCount = aliveCount - autoCount;
-    if (isLocal) {
+    if (isLocal && debugHudVisible) {
+      fpsFrames++;
+      if (now - fpsLastTime >= 1000) {
+        fpsValue = fpsFrames;
+        fpsFrames = 0;
+        fpsLastTime = now;
+      }
+      const burstCount = aliveCount - autoCount;
+      debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
       fpsEl.textContent = `${fpsValue} fps`;
       autoStat.statValueEl.textContent = `${autoCount}`;
       burstStat.statValueEl.textContent = `${burstCount}`;
@@ -1951,6 +1994,7 @@ function initHeroCanvas2D() {
     if (!heroVis.visible) { requestAnimationFrame(draw); return; }
     c.clearRect(0, 0, w, h);
     time += 0.005;
+    const whiteParticleColor = getWhiteParticleColor();
     if (isMobileView) {
       const t = performance.now() * 0.001;
       const breath = Math.sin(t * 0.52) * 0.5 + 0.5;
@@ -2016,8 +2060,15 @@ function initHeroCanvas2D() {
       const audioBoost = brightnessLevel * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
       const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
-      let pr = 212, pg = 168, pb = 67;
-      if (p.canWhiten) { const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy), density = connCount[i] / MAX_CONN, t = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4); pr += (191 - 212) * t; pg += (191 - 168) * t; pb += (199 - 67) * t; }
+      let pr = HERO_GOLD_RGB.r * 255, pg = HERO_GOLD_RGB.g * 255, pb = HERO_GOLD_RGB.b * 255;
+      if (p.canWhiten) {
+        const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+        const density = connCount[i] / MAX_CONN;
+        const t = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4);
+        pr += (whiteParticleColor.r * 255 - pr) * t;
+        pg += (whiteParticleColor.g * 255 - pg) * t;
+        pb += (whiteParticleColor.b * 255 - pb) * t;
+      }
       c.fillStyle = `rgba(${pr|0},${pg|0},${pb|0},${currentAlpha})`;
       if (currentR < 1.5) { const s = currentR * 2; c.fillRect(p.x - currentR, p.y - currentR, s, s); } else { c.beginPath(); c.arc(p.x, p.y, currentR, 0, Math.PI * 2); c.fill(); }
       if (currentAlpha > 0.35) glowList.push(p.x, p.y, currentR * 3);
