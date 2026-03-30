@@ -21,6 +21,16 @@ function fastSin(x) {
   return SIN_LUT[i] + (t - i) * (SIN_LUT[i + 1] - SIN_LUT[i]);
 }
 
+// x^1.5 lookup table for radial attenuation (input 0-1)
+const POW15_LUT_SIZE = 256;
+const POW15_LUT = new Float32Array(POW15_LUT_SIZE + 1);
+for (let i = 0; i <= POW15_LUT_SIZE; i++) { const x = i / POW15_LUT_SIZE; POW15_LUT[i] = x * Math.sqrt(x); }
+function fastPow15(x) {
+  const t = x * POW15_LUT_SIZE;
+  const i = t | 0;
+  return POW15_LUT[i] + (t - i) * (POW15_LUT[i + 1] - POW15_LUT[i]);
+}
+
 // Unified rAF loop — all canvas draw functions register here
 const drawCallbacks = [];
 function registerDraw(fn) { drawCallbacks.push(fn); }
@@ -1720,7 +1730,7 @@ function initHeroCanvas() {
         const localBrightnessIntensity = getDelayedIntensity(brightnessRippleBuf, distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
         const localSpinIntensity = getDelayedIntensity(spinRippleBuf, distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
         const radialBase = Math.max(0, 1 - distFromBtn / attenuationRadius);
-        const radialAttenuation = radialBase * Math.sqrt(radialBase);
+        const radialAttenuation = fastPow15(radialBase);
         const brightnessLocal = localBrightnessIntensity * radialAttenuation;
         const br = brightnessLocal * react;
         const audioBoost = br > 0.001 ? br * (0.8 + fastSin(time * 3.7 + p.phase * 2) * 0.3) : 0;
