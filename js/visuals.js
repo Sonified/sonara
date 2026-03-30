@@ -16,7 +16,8 @@ const SIN_LUT = new Float32Array(SIN_LUT_SIZE + 1);
 for (let i = 0; i <= SIN_LUT_SIZE; i++) SIN_LUT[i] = Math.sin((i / SIN_LUT_SIZE) * Math.PI * 2);
 const SIN_SCALE = SIN_LUT_SIZE / (Math.PI * 2);
 function fastSin(x) {
-  const t = ((x % 6.283185307179586) + 6.283185307179586) * SIN_SCALE;
+  let t = (x * SIN_SCALE) % SIN_LUT_SIZE;
+  if (t < 0) t += SIN_LUT_SIZE;
   const i = t | 0;
   return SIN_LUT[i] + (t - i) * (SIN_LUT[i + 1] - SIN_LUT[i]);
 }
