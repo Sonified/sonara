@@ -2214,84 +2214,83 @@ footer {
   display: none;
 }
 
-@media (max-width: 768px) and (hover: none) and (pointer: coarse),
-       (max-width: 768px) and (orientation: portrait) {
-  /* Lock to hero only — no scroll */
-  html {
-    overflow: hidden !important;
-    scroll-snap-type: none !important;
-    height: 100vh !important;
-  }
-  body {
-    overflow: hidden !important;
-    height: 100vh !important;
-  }
+/* Mobile lockout — detected once at page load via .is-mobile class on <html>.
+   Desktop users who resize their window will never trigger this. */
+html.is-mobile {
+  overflow: hidden !important;
+  scroll-snap-type: none !important;
+  height: 100vh !important;
+}
+html.is-mobile body {
+  overflow: hidden !important;
+  height: 100vh !important;
+}
 
-  /* Hide everything except hero */
-  #vision, #education, #citizen-science, #stem-music, #team, #contact,
-  .dot-nav, .scroll-hint {
-    display: none !important;
-  }
+/* Hide everything except hero */
+.is-mobile #vision, .is-mobile #education, .is-mobile #citizen-science,
+.is-mobile #stem-music, .is-mobile #team, .is-mobile #contact,
+.is-mobile .dot-nav, .is-mobile .scroll-hint {
+  display: none !important;
+}
 
-  /* Hero fills viewport */
-  #hero {
-    height: 100vh !important;
-    min-height: 100vh !important;
-  }
+/* Hero fills viewport */
+.is-mobile #hero {
+  height: 100vh !important;
+  min-height: 100vh !important;
+}
 
-  /* Hide the listen button and hero text content */
-  .hero-tagline,
-  .hero-expansion,
-  .hero-audio-meta,
-  .scroll-hint {
-    display: none !important;
-  }
+/* Hide the listen button and hero text content */
+.is-mobile .hero-tagline,
+.is-mobile .hero-expansion,
+.is-mobile .hero-audio-meta,
+.is-mobile .scroll-hint {
+  display: none !important;
+}
 
-  /* Show mobile overlay — positioned below hero title */
-  #mobile-overlay {
-    display: flex;
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    top: 0;
-    z-index: 2;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    padding-top: 14vh;
-  }
+/* Show mobile overlay — positioned below hero title */
+.is-mobile #mobile-overlay {
+  display: flex;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 0;
+  z-index: 2;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  padding-top: 14vh;
+}
 
-  .mobile-overlay-content {
-    text-align: center;
-    padding: 2rem;
-    max-width: 320px;
-  }
+.is-mobile .mobile-overlay-content {
+  text-align: center;
+  padding: 2rem;
+  max-width: 320px;
+}
 
-  .mobile-overlay-text {
-    font-family: var(--font-sans);
-    font-size: 1.1rem;
-    font-weight: 400;
-    color: rgba(232, 230, 227, 0.72);
-    line-height: 1.6;
-    letter-spacing: 0.02em;
-    margin-bottom: 1rem;
-  }
+.is-mobile .mobile-overlay-text {
+  font-family: var(--font-sans);
+  font-size: 1.1rem;
+  font-weight: 400;
+  color: rgba(232, 230, 227, 0.72);
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  margin-bottom: 1rem;
+}
 
-  .mobile-overlay-sub {
-    font-family: var(--font-mono);
-    font-size: 0.68rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: rgba(212, 168, 67, 0.42);
-    line-height: 1.5;
-  }
+.is-mobile .mobile-overlay-sub {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(212, 168, 67, 0.42);
+  line-height: 1.5;
+}
 
-  /* Keep SONARA title centered higher */
-  .hero-inner {
-    justify-content: center;
-    padding-bottom: 12vh;
-  }
+/* Keep SONARA title centered higher */
+.is-mobile .hero-inner {
+  justify-content: center;
+  padding-bottom: 12vh;
 }
 
 /* ===== Responsive ===== */
