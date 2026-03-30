@@ -1183,17 +1183,10 @@ function initHeroCanvas() {
 
   // --- Persistent connection data structures ---
   const connFade = new Map();
-  const connByPid = new Map();   // pid → Set<ck> — reverse index for O(1) wrap cleanup
   const grid = new Map();
   const framePairs = new Set();
   const CONN_FADE_IN = 0.04;
   const CONN_FADE_OUT = 0.025;
-  function deleteConn(ck) {
-    connFade.delete(ck);
-    const pidA = (ck / 65536) | 0, pidB = ck % 65536;
-    const sA = connByPid.get(pidA); if (sA) { sA.delete(ck); if (sA.size === 0) connByPid.delete(pidA); }
-    const sB = connByPid.get(pidB); if (sB) { sB.delete(ck); if (sB.size === 0) connByPid.delete(pidB); }
-  }
   let connSearchFrame = 0;
   let neighborCount = new Uint8Array(BUFFER_CAP);
 
@@ -1246,7 +1239,6 @@ function initHeroCanvas() {
   // ─── init ────────────────────────────────────────────────────────────
   function init() {
     connFade.clear();
-    connByPid.clear();
     grid.clear();
     framePairs.clear();
     const initialParticleCount = getSeedCount();
@@ -1484,12 +1476,11 @@ function initHeroCanvas() {
         const off = i * FPP;
         const life = cpuReadback[off + 9];
         const p = cpuParticles[i];
+        p.wrapped = false;
         const newX = cpuReadback[off];
         const newY = cpuReadback[off + 1];
         if (!p.dead && (Math.abs(newX - p.x) > halfW || Math.abs(newY - p.y) > halfH)) {
-          const pid = p.pid;
-          const pidConns = connByPid.get(pid);
-          if (pidConns) { for (const ck of [...pidConns]) deleteConn(ck); }
+          p.wrapped = true;
         }
         p.x = newX;
         p.y = newY;
@@ -1652,8 +1643,6 @@ function initHeroCanvas() {
                 if (!entry) {
                   entry = { alpha: 0, target: targetAlpha, a, b };
                   connFade.set(ck, entry);
-                  let s = connByPid.get(pidA); if (!s) { s = new Set(); connByPid.set(pidA, s); } s.add(ck);
-                  s = connByPid.get(pidB); if (!s) { s = new Set(); connByPid.set(pidB, s); } s.add(ck);
                 } else {
                   entry.target = targetAlpha;
                   entry.a = a;
@@ -1674,8 +1663,9 @@ function initHeroCanvas() {
     let lineIdx = 0;
     const toDelete = [];
     for (const [ck, entry] of connFade) {
-      if (entry.a.dead || entry.b.dead) {
-        entry.target = 0;
+      if (entry.a.wrapped || entry.b.wrapped || entry.a.dead || entry.b.dead) {
+        toDelete.push(ck);
+        continue;
       }
       if (doConnSearch && !framePairs.has(ck)) {
         entry.target = 0;
@@ -1696,7 +1686,7 @@ function initHeroCanvas() {
         lineData[lineIdx++] = entry.alpha;
       }
     }
-    for (const ck of toDelete) deleteConn(ck);
+    for (const ck of toDelete) connFade.delete(ck);
     const lineVertCount = lineIdx / 3;
 
     // ==================================================================
@@ -1707,6 +1697,7 @@ function initHeroCanvas() {
       let pIdx = 0;
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
+        p.wrapped = false;
         const wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5;
         const fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1;
         const react = p.reactivity || 0;
@@ -1785,8 +1776,7 @@ function initHeroCanvas() {
         if (p.y < 0) { p.y = 0; p.x = w - p.x; p.vy = Math.abs(p.vy); wrapped = true; }
         else if (p.y > h) { p.y = h; p.x = w - p.x; p.vy = -Math.abs(p.vy); wrapped = true; }
         if (wrapped) {
-          const pidConns = connByPid.get(p.pid);
-          if (pidConns) { for (const ck of [...pidConns]) deleteConn(ck); }
+          p.wrapped = true;
         }
       }
       activeCount = particles.length;
