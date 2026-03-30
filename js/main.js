@@ -402,8 +402,13 @@ import { initVisuals } from './visuals.js?v=13';
         btn.classList.add('settled');
         updateHeroHintPosition();
       }
-      // Show scroll hint after 4s on first listen click, then pulse later
+      // Show scroll hint after 4s on listen click (reset dismissed state so it re-shows)
       if (btn.classList.contains('listen-btn')) {
+        if (scrollHint && scrollHint.dataset.dismissed === '1') {
+          delete scrollHint.dataset.dismissed;
+          scrollHint.classList.remove('visible', 'show-chevron', 'pulsing', 'show-copy');
+          scrollHint.style.opacity = '';
+        }
         if (scrollHint && scrollHint.dataset.dismissed !== '1' && !scrollHint.classList.contains('visible') && !scrollHint.dataset.pendingReveal) {
           scrollHint.dataset.pendingReveal = '1';
           heroHintRevealTimer = setTimeout(() => {
@@ -527,9 +532,8 @@ import { initVisuals } from './visuals.js?v=13';
           scrollHint.style.opacity = '';
         } else {
           if (!heroHintIsArmed()) return;
-          // One-time hint: once user leaves hero after the cue is armed, never show again.
+          // Dismiss hint when user leaves hero — re-arms on next listen click
           dismissHeroHint();
-          hintObs.disconnect();
         }
       });
     }, { threshold: 0.8 });
