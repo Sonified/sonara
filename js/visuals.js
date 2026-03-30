@@ -1698,6 +1698,7 @@ function initHeroCanvas() {
     let activeCount = 0;
     if (!GPU_PHYSICS) {
       let pIdx = 0;
+      const attenuationRadius = Math.max(w, h) * FORCE_RADIUS;
       for (let i = 0; i < particles.length; i++) {
         const p = particles[i];
         const wave = Math.sin(time * 2 + p.phase) * 0.5 + 0.5;
@@ -1707,18 +1708,22 @@ function initHeroCanvas() {
         const distFromBtn = Math.sqrt(dxB * dxB + dyB * dyB);
         const localBrightnessIntensity = getDelayedIntensity(brightnessRippleBuf, distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
         const localSpinIntensity = getDelayedIntensity(spinRippleBuf, distFromBtn, p.rippleSpeed || RIPPLE_SPEED_BASE);
-        const attenuationRadius = Math.max(w, h) * FORCE_RADIUS;
-        const radialAttenuation = Math.pow(Math.max(0, 1 - distFromBtn / attenuationRadius), 1.5);
+        const radialBase = Math.max(0, 1 - distFromBtn / attenuationRadius);
+        const radialAttenuation = radialBase * Math.sqrt(radialBase);
         const brightnessLocal = localBrightnessIntensity * radialAttenuation;
-        const audioBoost = brightnessLocal * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
-        const tremble = (Math.random() - 0.5) * 0.12 * brightnessLocal * react;
+        const br = brightnessLocal * react;
+        const audioBoost = br > 0.001 ? br * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3) : 0;
+        const tremble = br > 0.001 ? (Math.random() - 0.5) * 0.12 * br : 0;
         const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * HERO_PARTICLE_BRIGHTNESS);
         const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
 
         // Fill GPU buffer — color shift from speed + local density
-        const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-        const density = neighborCount[i] / MAX_CONN; // 0-1 based on connection saturation
-        const wt = p.canWhiten ? Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4) : 0;
+        let wt = 0;
+        if (p.canWhiten) {
+          const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+          const density = neighborCount[i] / MAX_CONN;
+          wt = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4);
+        }
         particleData[pIdx++] = p.x;
         particleData[pIdx++] = p.y;
         particleData[pIdx++] = Math.max(3, currentR * 6);
@@ -1732,8 +1737,7 @@ function initHeroCanvas() {
         // Audio swirl
         {
           const dist = distFromBtn || 1;
-          const swirlRadius = Math.max(w, h) * FORCE_RADIUS;
-          const proximity = Math.max(0, 1 - dist / swirlRadius);
+          const proximity = Math.max(0, 1 - dist / attenuationRadius);
           if (localSpinIntensity > 0.01 && proximity > 0) {
             const nx = dxB / dist, ny = dyB / dist;
             const swirlStr = localSpinIntensity * proximity * SWIRL_FORCE;
