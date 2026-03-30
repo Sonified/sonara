@@ -231,15 +231,27 @@ function initHeroCanvas() {
   debugThirdRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   const debugConnCountEl = document.createElement('span');
   debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;white-space:nowrap';
+  const debugPerfRow = document.createElement('div');
+  debugPerfRow.style.cssText = 'display:flex;align-items:center;gap:8px';
   debugBar.appendChild(debugTopRow);
   debugBar.appendChild(debugSecondRow);
   debugBar.appendChild(debugThirdRow);
+  debugBar.appendChild(debugPerfRow);
   const debugToggleBtn = document.createElement('button');
   debugToggleBtn.type = 'button';
   debugToggleBtn.style.cssText = DEBUG_TOGGLE_BUTTON_STYLE;
   const syncDebugHudVisibility = () => {
     debugBar.style.display = debugHudVisible ? 'flex' : 'none';
+    debugPerfRow.style.display = debugHudVisible ? 'flex' : 'none';
     debugToggleBtn.textContent = debugHudVisible ? 'hide' : 'show';
+    if (!debugHudVisible) {
+      fpsFrames = 0;
+      fpsValue = 0;
+      fpsLastTime = performance.now();
+      ftSmooth = 0;
+      fpsEl.textContent = '';
+      ftEl.textContent = '';
+    }
     localStorage.setItem(DEBUG_HUD_VISIBLE_KEY, debugHudVisible ? '1' : '0');
   };
   if (isLocal) {
@@ -422,10 +434,14 @@ function initHeroCanvas() {
 
   }
 
-  // FPS display (fixed width so it doesn't jump)
+  // FPS + frame budget display (own row, left-aligned)
   const fpsEl = document.createElement('span');
-  fpsEl.style.cssText = 'pointer-events:none;display:inline-block;flex:0 0 8ch;width:8ch;text-align:right;white-space:nowrap;color:#f0c040';
-  debugTopRow.appendChild(fpsEl);
+  fpsEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:7ch;white-space:nowrap;color:#f0c040';
+  debugPerfRow.appendChild(fpsEl);
+  const ftEl = document.createElement('span');
+  ftEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:4ch;white-space:nowrap;color:#f0c040';
+  debugPerfRow.appendChild(ftEl);
+  let ftSmooth = 0;
 
   // Max particles dropdown (between FPS and particle counts)
   if (isLocal) {
@@ -1828,6 +1844,12 @@ function initHeroCanvas() {
         fpsFrames = 0;
         fpsLastTime = now;
       }
+      const frameTime = performance.now() - now;
+      ftSmooth += (frameTime - ftSmooth) * 0.1;
+      const budget = 1000 / (fpsValue || 60);
+      const pct = Math.round(ftSmooth / budget * 100);
+      ftEl.textContent = `${pct}%`;
+      ftEl.style.color = pct < 50 ? '#4caf50' : pct < 75 ? '#f0c040' : '#f44336';
       const burstCount = aliveCount - autoCount;
       debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
       fpsEl.textContent = `${fpsValue} fps`;
