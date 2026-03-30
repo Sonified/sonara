@@ -44,6 +44,10 @@ const HERO_DEBUG_DEFAULTS = {
     mobile: 2000,
     desktop: 10500,
   },
+  rippleBase: 2,
+  rippleVariance: 4,
+  rmsAttack: 0.42,
+  rmsRelease: 0.16,
   connDist: 200,
   maxConn: 5,
   connSkip: 2,
@@ -54,6 +58,10 @@ const HERO_DEBUG_DEFAULTS = {
 };
 
 const FORCE_RADIUS = 0.64; // default: 0.6 — fraction of canvas size for audio/swirl force reach
+let RIPPLE_SPEED_BASE = +(localStorage.getItem('sonara_rippleBase') || HERO_DEBUG_DEFAULTS.rippleBase);
+let RIPPLE_SPEED_VAR = +(localStorage.getItem('sonara_rippleVariance') || HERO_DEBUG_DEFAULTS.rippleVariance);
+let RMS_ATTACK = +(localStorage.getItem('sonara_rmsAttack') || HERO_DEBUG_DEFAULTS.rmsAttack);
+let RMS_RELEASE = +(localStorage.getItem('sonara_rmsRelease') || HERO_DEBUG_DEFAULTS.rmsRelease);
 let SWIRL_FORCE = +(localStorage.getItem('sonara_swirlForce') || HERO_DEBUG_DEFAULTS.swirlForce);
 let PULL_FORCE = +(localStorage.getItem('sonara_pullForce') || HERO_DEBUG_DEFAULTS.pullForce);
 let FRICTION = +(localStorage.getItem('sonara_friction') || HERO_DEBUG_DEFAULTS.friction);
@@ -128,11 +136,16 @@ function initHeroCanvas() {
       mobile: isMobileView ? MAX_PARTICLES : HERO_DEBUG_DEFAULTS.maxParticles.mobile,
       desktop: isMobileView ? HERO_DEBUG_DEFAULTS.maxParticles.desktop : MAX_PARTICLES,
     },
+    rippleBase: Number(RIPPLE_SPEED_BASE.toFixed(1)),
+    rippleVariance: Number(RIPPLE_SPEED_VAR.toFixed(1)),
+    rmsAttack: Number(RMS_ATTACK.toFixed(2)),
+    rmsRelease: Number(RMS_RELEASE.toFixed(2)),
     connDist: CONN_REACH,
     maxConn: MAX_CONN,
     connSkip: CONN_SEARCH_INTERVAL,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
+    friction: Number(FRICTION.toFixed(3)),
     swirlCenter: swirlCenterTarget,
   });
   const heroVis = trackVisibility('hero');
@@ -140,9 +153,95 @@ function initHeroCanvas() {
   // Debug HUD (localhost only)
   const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   const debugBar = document.createElement('div');
-  debugBar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:9999;color:#00ccff;font:bold 18px/1 monospace;display:flex;align-items:center;gap:14px';
+  debugBar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:9999;color:#00ccff;font:bold 18px/1 monospace;display:flex;flex-direction:column;align-items:flex-start;gap:8px';
+  const debugTopRow = document.createElement('div');
+  debugTopRow.style.cssText = 'display:flex;align-items:center;gap:14px';
+  const debugSecondRow = document.createElement('div');
+  debugSecondRow.style.cssText = 'display:flex;align-items:center;gap:14px';
+  debugBar.appendChild(debugTopRow);
+  debugBar.appendChild(debugSecondRow);
+  if (isLocal) {
+    debugBar.addEventListener('change', (e) => {
+      if (e.target instanceof HTMLSelectElement) {
+        e.target.blur();
+      }
+    });
+    debugBar.addEventListener('click', (e) => {
+      if (e.target instanceof HTMLButtonElement) {
+        window.setTimeout(() => e.target.blur(), 0);
+      }
+    });
+  }
   // Connection search interval dropdown (left of FPS)
   if (isLocal) {
+    const rbLabel = document.createElement('span');
+    rbLabel.textContent = 'Ripple base:';
+    const rbSel = document.createElement('select');
+    rbSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 0; i <= 10; i++) {
+      const v = i * 0.5;
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.rippleBase) < 0.001;
+      opt.textContent = v.toFixed(1) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - RIPPLE_SPEED_BASE) < 0.001) opt.selected = true;
+      rbSel.appendChild(opt);
+    }
+    rbSel.addEventListener('change', () => { RIPPLE_SPEED_BASE = +rbSel.value; localStorage.setItem('sonara_rippleBase', RIPPLE_SPEED_BASE); });
+    debugSecondRow.appendChild(rbLabel);
+    debugSecondRow.appendChild(rbSel);
+
+    const rvLabel = document.createElement('span');
+    rvLabel.textContent = 'Ripple var:';
+    const rvSel = document.createElement('select');
+    rvSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 0; i <= 8; i++) {
+      const v = i * 0.5;
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.rippleVariance) < 0.001;
+      opt.textContent = v.toFixed(1) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - RIPPLE_SPEED_VAR) < 0.001) opt.selected = true;
+      rvSel.appendChild(opt);
+    }
+    rvSel.addEventListener('change', () => { RIPPLE_SPEED_VAR = +rvSel.value; localStorage.setItem('sonara_rippleVariance', RIPPLE_SPEED_VAR); });
+    debugSecondRow.appendChild(rvLabel);
+    debugSecondRow.appendChild(rvSel);
+
+    const raLabel = document.createElement('span');
+    raLabel.textContent = 'RMS atk:';
+    const raSel = document.createElement('select');
+    raSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 0; i <= 50; i++) {
+      const v = i * 0.02;
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.rmsAttack) < 0.001;
+      opt.textContent = v.toFixed(2) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - RMS_ATTACK) < 0.001) opt.selected = true;
+      raSel.appendChild(opt);
+    }
+    raSel.addEventListener('change', () => { RMS_ATTACK = +raSel.value; localStorage.setItem('sonara_rmsAttack', RMS_ATTACK); });
+    debugSecondRow.appendChild(raLabel);
+    debugSecondRow.appendChild(raSel);
+
+    const rrLabel = document.createElement('span');
+    rrLabel.textContent = 'RMS rel:';
+    const rrSel = document.createElement('select');
+    rrSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 0; i <= 50; i++) {
+      const v = i * 0.02;
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.rmsRelease) < 0.001;
+      opt.textContent = v.toFixed(2) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - RMS_RELEASE) < 0.001) opt.selected = true;
+      rrSel.appendChild(opt);
+    }
+    rrSel.addEventListener('change', () => { RMS_RELEASE = +rrSel.value; localStorage.setItem('sonara_rmsRelease', RMS_RELEASE); });
+    debugSecondRow.appendChild(rrLabel);
+    debugSecondRow.appendChild(rrSel);
+
     const label = document.createElement('span');
     label.textContent = 'Conn skip:';
     const sel = document.createElement('select');
@@ -154,15 +253,15 @@ function initHeroCanvas() {
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => { CONN_SEARCH_INTERVAL = +sel.value; connSearchFrame = 0; localStorage.setItem('sonara_connSkip', CONN_SEARCH_INTERVAL); });
-    debugBar.appendChild(label);
-    debugBar.appendChild(sel);
+    debugTopRow.appendChild(label);
+    debugTopRow.appendChild(sel);
 
   }
 
   // FPS display (fixed width so it doesn't jump)
   const fpsEl = document.createElement('span');
   fpsEl.style.cssText = 'pointer-events:none;display:inline-block;flex:0 0 8ch;width:8ch;text-align:right;white-space:nowrap;color:#f0c040';
-  debugBar.appendChild(fpsEl);
+  debugTopRow.appendChild(fpsEl);
 
   // Max particles dropdown (between FPS and particle counts)
   if (isLocal) {
@@ -181,8 +280,8 @@ function initHeroCanvas() {
       THROTTLE_START = Math.round(MAX_PARTICLES * 0.8);
       localStorage.setItem('sonara_maxParticles', MAX_PARTICLES);
     });
-    debugBar.appendChild(pLabel);
-    debugBar.appendChild(pSel);
+    debugTopRow.appendChild(pLabel);
+    debugTopRow.appendChild(pSel);
   }
 
   // Particle stats
@@ -211,7 +310,7 @@ function initHeroCanvas() {
   counterEl.appendChild(burstStat.statEl);
   counterEl.appendChild(totalStat.statEl);
   counterEl.appendChild(highWaterEl);
-  debugBar.appendChild(counterEl);
+  debugTopRow.appendChild(counterEl);
 
   // Connection tuning dropdowns (right of T)
   if (isLocal) {
@@ -226,8 +325,8 @@ function initHeroCanvas() {
       cSel.appendChild(opt);
     }
     cSel.addEventListener('change', () => { MAX_CONN = +cSel.value; localStorage.setItem('sonara_maxConn', MAX_CONN); });
-    debugBar.appendChild(cLabel);
-    debugBar.appendChild(cSel);
+    debugTopRow.appendChild(cLabel);
+    debugTopRow.appendChild(cSel);
 
     const dLabel = document.createElement('span');
     dLabel.textContent = 'Dist:';
@@ -240,8 +339,8 @@ function initHeroCanvas() {
       dSel.appendChild(opt);
     }
     dSel.addEventListener('change', () => { updateConnReach(+dSel.value); localStorage.setItem('sonara_connDist', CONN_REACH); });
-    debugBar.appendChild(dLabel);
-    debugBar.appendChild(dSel);
+    debugTopRow.appendChild(dLabel);
+    debugTopRow.appendChild(dSel);
 
     const sLabel = document.createElement('span');
     sLabel.textContent = 'Swirl:';
@@ -257,8 +356,8 @@ function initHeroCanvas() {
       sSel.appendChild(opt);
     }
     sSel.addEventListener('change', () => { SWIRL_FORCE = +sSel.value; localStorage.setItem('sonara_swirlForce', SWIRL_FORCE); });
-    debugBar.appendChild(sLabel);
-    debugBar.appendChild(sSel);
+    debugTopRow.appendChild(sLabel);
+    debugTopRow.appendChild(sSel);
 
     const plLabel = document.createElement('span');
     plLabel.textContent = 'Pull:';
@@ -274,8 +373,8 @@ function initHeroCanvas() {
       plSel.appendChild(opt);
     }
     plSel.addEventListener('change', () => { PULL_FORCE = +plSel.value; localStorage.setItem('sonara_pullForce', PULL_FORCE); });
-    debugBar.appendChild(plLabel);
-    debugBar.appendChild(plSel);
+    debugTopRow.appendChild(plLabel);
+    debugTopRow.appendChild(plSel);
 
     const frLabel = document.createElement('span');
     frLabel.textContent = 'Friction:';
@@ -291,8 +390,8 @@ function initHeroCanvas() {
       frSel.appendChild(opt);
     }
     frSel.addEventListener('change', () => { FRICTION = +frSel.value; localStorage.setItem('sonara_friction', FRICTION); });
-    debugBar.appendChild(frLabel);
-    debugBar.appendChild(frSel);
+    debugTopRow.appendChild(frLabel);
+    debugTopRow.appendChild(frSel);
 
     const scLabel = document.createElement('span');
     scLabel.textContent = 'Center:';
@@ -313,8 +412,8 @@ function initHeroCanvas() {
       scSel.appendChild(opt);
     });
     scSel.addEventListener('change', () => { swirlCenterTarget = scSel.value; localStorage.setItem('sonara_swirlCenter', swirlCenterTarget); });
-    debugBar.appendChild(scLabel);
-    debugBar.appendChild(scSel);
+    debugTopRow.appendChild(scLabel);
+    debugTopRow.appendChild(scSel);
 
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
@@ -337,7 +436,7 @@ function initHeroCanvas() {
         copyBtn.disabled = false;
       }, 1200);
     });
-    debugBar.appendChild(copyBtn);
+    debugTopRow.appendChild(copyBtn);
   }
   if (isLocal) {
     canvas.parentElement.appendChild(debugBar);
@@ -828,8 +927,6 @@ function initHeroCanvas() {
   gl.bindVertexArray(null);
 
   // --- Ripple buffer (shared JS array; GPU path also uploads to texture) ---
-  const RIPPLE_SPEED_BASE = 2;
-  const RIPPLE_SPEED_VAR = 4;
   const RIPPLE_BUF_LEN = 512;
   const rippleBuf = new Float32Array(RIPPLE_BUF_LEN);
   let rippleHead = 0;
@@ -989,7 +1086,7 @@ function initHeroCanvas() {
       const synthetic = breath * 0.55 + swell * 0.3 + shimmer * 0.15;
       const target = synthetic * 0.55 + 0.05;
       const transientTarget = synthetic * 0.7 + 0.05;
-      const rate = target > audioIntensity ? 0.25 : 0.12;
+      const rate = target > audioIntensity ? RMS_ATTACK : RMS_RELEASE;
       audioIntensity += (target - audioIntensity) * rate;
       audioTransient += (transientTarget - audioTransient) * 0.45;
       rmsSmooth += (target - rmsSmooth) * 0.018;
@@ -1006,7 +1103,7 @@ function initHeroCanvas() {
       const rms = Math.sqrt(sum / heroRmsData.length);
       const target = Math.min(1, rms * 10);
       const transientTarget = Math.min(1, rms * 16);
-      const rate = target > audioIntensity ? 0.42 : 0.16;
+      const rate = target > audioIntensity ? RMS_ATTACK : RMS_RELEASE;
       audioIntensity += (target - audioIntensity) * rate;
       audioTransient += (transientTarget - audioTransient) * 0.68;
       rmsSmooth += (target - rmsSmooth) * 0.018;
@@ -1635,7 +1732,7 @@ function initHeroCanvas2D() {
       const shimmer = Math.sin(t * 3.5 + 0.3) * 0.5 + 0.5;
       const synthetic = breath * 0.55 + swell * 0.3 + shimmer * 0.15;
       const target = synthetic * 0.55 + 0.05;
-      audioIntensity += ((target > audioIntensity ? 0.25 : 0.12) * (target - audioIntensity));
+      audioIntensity += ((target > audioIntensity ? RMS_ATTACK : RMS_RELEASE) * (target - audioIntensity));
       rmsSmooth += (target - rmsSmooth) * 0.018;
     } else {
     const heroAn = getHeroAnalyser();
@@ -1645,7 +1742,7 @@ function initHeroCanvas2D() {
       for (let i = 0; i < heroRmsData.length; i++) { const v = (heroRmsData[i] - 128) / 128; sum += v * v; }
       const rms = Math.sqrt(sum / heroRmsData.length);
       const target = Math.min(1, rms * 10);
-      audioIntensity += ((target > audioIntensity ? 0.42 : 0.16) * (target - audioIntensity));
+      audioIntensity += ((target > audioIntensity ? RMS_ATTACK : RMS_RELEASE) * (target - audioIntensity));
       rmsSmooth += (target - rmsSmooth) * 0.018;
       const now = performance.now();
       if (target > rmsSmooth + 0.35 && now - lastRippleTime > 1200) { spawnRipple(); lastRippleTime = now; }

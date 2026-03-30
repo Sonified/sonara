@@ -247,6 +247,7 @@ import { initVisuals } from './visuals.js?v=8';
   const paperTitle = document.querySelector('.cs-paper-title');
   const heroBtn = document.querySelector('.listen-btn');
   const fadingButtons = new Set();
+  const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
   // When the entrance fadeUp finishes, switch to pulse mode
   if (heroBtn) {
@@ -599,8 +600,15 @@ import { initVisuals } from './visuals.js?v=8';
   }, { passive: true });
 
   window.addEventListener('keydown', (e) => {
+    const targetTag = e.target?.tagName;
+    const isFormTarget = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(targetTag);
     if (e.key === 'Tab') {
       e.preventDefault();
+      return;
+    }
+    if (isLocal && !isFormTarget && e.key === 'Enter' && heroBtn) {
+      e.preventDefault();
+      heroBtn.click();
       return;
     }
     if (['ArrowDown', 'PageDown', ' ', 'Spacebar'].includes(e.key)) {
