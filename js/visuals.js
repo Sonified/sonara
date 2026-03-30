@@ -81,12 +81,12 @@ const HERO_DEBUG_DEFAULTS = {
   rippleBase: 20,
   rippleVariance: 2,
   rippleInnerRadius: 400,
-  brightnessAttack: 0.2,
-  brightnessRelease: 0.16,
+  brightnessAttack: 0.14,
+  brightnessRelease: 0.14,
   spinAttack: 0.6,
   spinRelease: 0.46,
   connDist: 170,
-  maxConn: 2,
+  maxConn: 3,
   connSkip: 5,
   whiteParticlePct: 15,
   whiteBrightnessCap: 60,
@@ -1477,7 +1477,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       gpuPhysicsPipeline = pipeline;
       gpuDevice._bindGroupLayout = bindGroupLayout;
 
-      console.log('WebGPU compute ready — will activate on next init');
+      console.log('WebGPU compute ready — hot-swapping from CPU');
+      // Hot-swap: re-run init() now that gpuDevice is available
+      if (w && h) init();
     } catch (e) {
       console.warn('WebGPU init failed, staying on CPU:', e);
     }
@@ -1917,6 +1919,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
           if (dead) {
             if (!s.dead) {
+              // Kill all connections referencing this particle before freeing the slot
+              const pid = s.pid;
+              for (const [ck] of connFade) {
+                if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
+                  connFade.delete(ck);
+                }
+              }
               s.dead = true;
               gpuFreeSlots.push(i);
             }
@@ -1963,9 +1972,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       pass.dispatchWorkgroups(Math.ceil(gpuWatermark / 256));
       pass.end();
 
-      // Copy output to readback buffer
-      const readbackBytes = gpuWatermark * GPU_OUTPUT_STRIDE;
-      commandEncoder.copyBufferToBuffer(gpuOutputBuf, 0, gpuOutputReadBuf, 0, readbackBytes);
+      // Copy output to readback buffer only if it's not currently mapped/pending
+      if (!gpuReadbackPending) {
+        const readbackBytes = gpuWatermark * GPU_OUTPUT_STRIDE;
+        commandEncoder.copyBufferToBuffer(gpuOutputBuf, 0, gpuOutputReadBuf, 0, readbackBytes);
+      }
       gpuDevice.queue.submit([commandEncoder.finish()]);
 
       // Start async readback for NEXT frame (skip if previous still pending)
