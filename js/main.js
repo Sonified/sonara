@@ -309,6 +309,56 @@ import { initVisuals } from './visuals.js?v=8';
     requestAnimationFrame(check);
   }
 
+  const scrollHint = document.querySelector('.scroll-hint');
+  let heroHintRevealTimer = null;
+  let heroHintPulseTimer = null;
+  let heroHintCopyTimer = null;
+
+  function clearHeroHintReveal(removeVisible = false) {
+    if (heroHintRevealTimer) {
+      clearTimeout(heroHintRevealTimer);
+      heroHintRevealTimer = null;
+    }
+    if (heroHintPulseTimer) {
+      clearTimeout(heroHintPulseTimer);
+      heroHintPulseTimer = null;
+    }
+    if (removeVisible && scrollHint) scrollHint.classList.remove('visible');
+    if (scrollHint) delete scrollHint.dataset.pendingReveal;
+  }
+
+  function clearHeroHintCopy(removeVisible = false) {
+    if (heroHintCopyTimer) {
+      clearTimeout(heroHintCopyTimer);
+      heroHintCopyTimer = null;
+    }
+    if (removeVisible && scrollHint) scrollHint.classList.remove('show-copy');
+  }
+
+  function dismissHeroHint() {
+    if (!scrollHint) return;
+    clearHeroHintReveal(true);
+    clearHeroHintCopy(true);
+    scrollHint.classList.remove('pulsing');
+    scrollHint.style.opacity = '0';
+    scrollHint.dataset.dismissed = '1';
+  }
+
+  function heroHintIsArmed() {
+    return Boolean(
+      scrollHint &&
+      (
+        scrollHint.dataset.pendingReveal === '1' ||
+        heroHintRevealTimer ||
+        heroHintPulseTimer ||
+        heroHintCopyTimer ||
+        scrollHint.classList.contains('visible') ||
+        scrollHint.classList.contains('pulsing') ||
+        scrollHint.classList.contains('show-copy')
+      )
+    );
+  }
+
   document.querySelectorAll('.sound-trigger').forEach(btn => {
     btn.addEventListener('click', async () => {
       const soundId = getSoundId(btn);
@@ -316,20 +366,21 @@ import { initVisuals } from './visuals.js?v=8';
       if (btn.classList.contains('listen-btn')) {
         btn.classList.add('settled');
       }
-      // Show scroll hint after 5s on first listen click, then pulse later
+      // Show scroll hint after 4s on first listen click, then pulse later
       if (btn.classList.contains('listen-btn')) {
-        const hint = document.querySelector('.scroll-hint');
-        if (hint && hint.dataset.dismissed !== '1' && !hint.classList.contains('visible') && !hint.dataset.pendingReveal) {
-          hint.dataset.pendingReveal = '1';
-          setTimeout(() => {
-            if (hint.dataset.dismissed === '1') return;
-            hint.classList.add('visible');
-            delete hint.dataset.pendingReveal;
-            setTimeout(() => {
-              if (hint.dataset.dismissed === '1') return;
-              hint.classList.add('pulsing');
+        if (scrollHint && scrollHint.dataset.dismissed !== '1' && !scrollHint.classList.contains('visible') && !scrollHint.dataset.pendingReveal) {
+          scrollHint.dataset.pendingReveal = '1';
+          heroHintRevealTimer = setTimeout(() => {
+            heroHintRevealTimer = null;
+            if (scrollHint.dataset.dismissed === '1') return;
+            scrollHint.classList.add('visible');
+            delete scrollHint.dataset.pendingReveal;
+            heroHintPulseTimer = setTimeout(() => {
+              heroHintPulseTimer = null;
+              if (scrollHint.dataset.dismissed === '1') return;
+              scrollHint.classList.add('pulsing');
             }, 3000);
-          }, 4500);
+          }, 4000);
         }
       }
       if (fadingButtons.has(btn)) {
@@ -395,17 +446,6 @@ import { initVisuals } from './visuals.js?v=8';
 
   // ===== Scroll Hint Fade =====
   // Only show/hide based on hero visibility AFTER the hint has been revealed by listen click
-  const scrollHint = document.querySelector('.scroll-hint');
-  let heroHintCopyTimer = null;
-
-  function clearHeroHintCopy(removeVisible = false) {
-    if (heroHintCopyTimer) {
-      clearTimeout(heroHintCopyTimer);
-      heroHintCopyTimer = null;
-    }
-    if (removeVisible && scrollHint) scrollHint.classList.remove('show-copy');
-  }
-
   function scheduleHeroHintCopy() {
     if (!scrollHint || heroHintCopyTimer || scrollHint.dataset.dismissed === '1') return;
     heroHintCopyTimer = setTimeout(() => {
@@ -413,26 +453,19 @@ import { initVisuals } from './visuals.js?v=8';
       if (scrollHint.classList.contains('visible')) {
         scrollHint.classList.add('show-copy');
       }
-    }, 10000);
+    }, 7000);
   }
 
   if (scrollHint) {
     const hintObs = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-        if (!scrollHint.classList.contains('visible')) return;
         if (scrollHint.dataset.dismissed === '1') return;
         if (entry.isIntersecting) {
-          scrollHint.dataset.seenInHero = '1';
           scrollHint.style.opacity = '';
         } else {
-          // Ignore initial non-intersecting states until hint has actually been seen in hero.
-          if (scrollHint.dataset.seenInHero !== '1') return;
-          // One-time hint: once user leaves hero after seeing it, never show again.
-          scrollHint.style.opacity = '0';
-          scrollHint.classList.remove('pulsing');
-          scrollHint.classList.remove('show-copy');
-          scrollHint.dataset.dismissed = '1';
-          clearHeroHintCopy(true);
+          if (!heroHintIsArmed()) return;
+          // One-time hint: once user leaves hero after the cue is armed, never show again.
+          dismissHeroHint();
           hintObs.disconnect();
         }
       });

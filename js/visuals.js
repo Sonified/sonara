@@ -10,10 +10,12 @@ const getCitizenAnalyser = typeof audio.getCitizenAnalyser === 'function'
   ? audio.getCitizenAnalyser
   : () => null;
 
-let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
+let mouseX = 0, mouseY = 0;
+let mouseActive = false;
 document.addEventListener('mousemove', (e) => {
   mouseX = e.clientX;
   mouseY = e.clientY;
+  mouseActive = true;
 });
 
 // Mobile detection — touch device with narrow viewport
@@ -37,7 +39,51 @@ function trackVisibility(sectionId) {
 
 
 // ===== Shared tuning constants =====
+const HERO_DEBUG_DEFAULTS = {
+  maxParticles: {
+    mobile: 2000,
+    desktop: 10500,
+  },
+  connDist: 200,
+  maxConn: 5,
+  connSkip: 2,
+  swirlForce: 0.04,
+  pullForce: 0.012,
+  friction: 0.985,
+  swirlCenter: 'listen',
+};
+
 const FORCE_RADIUS = 0.64; // default: 0.6 — fraction of canvas size for audio/swirl force reach
+let SWIRL_FORCE = +(localStorage.getItem('sonara_swirlForce') || HERO_DEBUG_DEFAULTS.swirlForce);
+let PULL_FORCE = +(localStorage.getItem('sonara_pullForce') || HERO_DEBUG_DEFAULTS.pullForce);
+let FRICTION = +(localStorage.getItem('sonara_friction') || HERO_DEBUG_DEFAULTS.friction);
+
+function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+
+  return new Promise((resolve, reject) => {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+
+    try {
+      if (!document.execCommand('copy')) {
+        throw new Error('Copy command was rejected');
+      }
+      resolve();
+    } catch (error) {
+      reject(error);
+    } finally {
+      textarea.remove();
+    }
+  });
+}
 
 // ===== Hero: Audio-reactive particle constellation (WebGL2 + Transform Feedback) =====
 function initHeroCanvas() {
@@ -56,7 +102,7 @@ function initHeroCanvas() {
   // --- Shared state ---
   let w, h;
   const _savedMax = localStorage.getItem('sonara_maxParticles');
-  let MAX_PARTICLES = _savedMax ? +_savedMax : (isMobileView ? 2000 : 10500);  // TEMP 3x (default: 3500)
+  let MAX_PARTICLES = _savedMax ? +_savedMax : (isMobileView ? HERO_DEBUG_DEFAULTS.maxParticles.mobile : HERO_DEBUG_DEFAULTS.maxParticles.desktop);
   let THROTTLE_START = Math.round(MAX_PARTICLES * 0.8);
   const PARTICLE_COUNT = Math.min(isMobileView ? 1000 : 6000, MAX_PARTICLES);
   const BUFFER_CAP = 12000; // sized for max dropdown value (11000) + headroom for burst spawns
@@ -64,24 +110,37 @@ function initHeroCanvas() {
   let lineIntensity = 0;
   let fpsFrames = 0, fpsLastTime = performance.now(), fpsValue = 0;
   const HERO_PARTICLE_BRIGHTNESS = 1.15;
-  let CONN_REACH = +(localStorage.getItem('sonara_connDist') || 200);
+  let CONN_REACH = +(localStorage.getItem('sonara_connDist') || HERO_DEBUG_DEFAULTS.connDist);
   let CONN_REACH_SQ = CONN_REACH * CONN_REACH;
   let CONN_FADE_START = CONN_REACH * 0.8;
   let CONN_FADE_START_SQ = CONN_FADE_START * CONN_FADE_START;
   let CONN_BUCKET_DIV = CONN_REACH_SQ / 5;
-  let MAX_CONN = +(localStorage.getItem('sonara_maxConn') || 5);
+  let MAX_CONN = +(localStorage.getItem('sonara_maxConn') || HERO_DEBUG_DEFAULTS.maxConn);
   function updateConnReach(v) {
     CONN_REACH = v; CONN_REACH_SQ = v * v;
     CONN_FADE_START = v * 0.8; CONN_FADE_START_SQ = CONN_FADE_START * CONN_FADE_START;
     CONN_BUCKET_DIV = CONN_REACH_SQ / 5;
   }
-  let CONN_SEARCH_INTERVAL = +(localStorage.getItem('sonara_connSkip') || 2);
+  let CONN_SEARCH_INTERVAL = +(localStorage.getItem('sonara_connSkip') || HERO_DEBUG_DEFAULTS.connSkip);
+  const listenBtn = document.querySelector('#hero .listen-btn');
+  const getDebugSettingsSnapshot = () => ({
+    maxParticles: {
+      mobile: isMobileView ? MAX_PARTICLES : HERO_DEBUG_DEFAULTS.maxParticles.mobile,
+      desktop: isMobileView ? HERO_DEBUG_DEFAULTS.maxParticles.desktop : MAX_PARTICLES,
+    },
+    connDist: CONN_REACH,
+    maxConn: MAX_CONN,
+    connSkip: CONN_SEARCH_INTERVAL,
+    swirlForce: Number(SWIRL_FORCE.toFixed(3)),
+    pullForce: Number(PULL_FORCE.toFixed(3)),
+    swirlCenter: swirlCenterTarget,
+  });
   const heroVis = trackVisibility('hero');
 
   // Debug HUD (localhost only)
   const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   const debugBar = document.createElement('div');
-  debugBar.style.cssText = `position:fixed;top:12px;left:12px;z-index:9999;color:#00ccff;font:bold 18px/1 monospace;display:${isLocal ? 'flex' : 'none'};align-items:center;gap:14px`;
+  debugBar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:9999;color:#00ccff;font:bold 18px/1 monospace;display:flex;align-items:center;gap:14px';
   // Connection search interval dropdown (left of FPS)
   if (isLocal) {
     const label = document.createElement('span');
@@ -183,8 +242,116 @@ function initHeroCanvas() {
     dSel.addEventListener('change', () => { updateConnReach(+dSel.value); localStorage.setItem('sonara_connDist', CONN_REACH); });
     debugBar.appendChild(dLabel);
     debugBar.appendChild(dSel);
+
+    const sLabel = document.createElement('span');
+    sLabel.textContent = 'Swirl:';
+    const sSel = document.createElement('select');
+    sSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 0; i <= 100; i += 5) {
+      const v = i / 1000; // 0.000 to 0.100 in steps of 0.005
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.swirlForce) < 0.001;
+      opt.textContent = v.toFixed(3) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - SWIRL_FORCE) < 0.001) opt.selected = true;
+      sSel.appendChild(opt);
+    }
+    sSel.addEventListener('change', () => { SWIRL_FORCE = +sSel.value; localStorage.setItem('sonara_swirlForce', SWIRL_FORCE); });
+    debugBar.appendChild(sLabel);
+    debugBar.appendChild(sSel);
+
+    const plLabel = document.createElement('span');
+    plLabel.textContent = 'Pull:';
+    const plSel = document.createElement('select');
+    plSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 0; i <= 100; i += 2) {
+      const v = i / 1000; // 0.000 to 0.100 in steps of 0.002
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.pullForce) < 0.001;
+      opt.textContent = v.toFixed(3) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - PULL_FORCE) < 0.001) opt.selected = true;
+      plSel.appendChild(opt);
+    }
+    plSel.addEventListener('change', () => { PULL_FORCE = +plSel.value; localStorage.setItem('sonara_pullForce', PULL_FORCE); });
+    debugBar.appendChild(plLabel);
+    debugBar.appendChild(plSel);
+
+    const frLabel = document.createElement('span');
+    frLabel.textContent = 'Friction:';
+    const frSel = document.createElement('select');
+    frSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    for (let i = 950; i <= 1000; i += 5) {
+      const v = i / 1000; // 0.950 to 1.000 in steps of 0.005
+      const opt = document.createElement('option');
+      opt.value = v;
+      const isDefault = Math.abs(v - HERO_DEBUG_DEFAULTS.friction) < 0.001;
+      opt.textContent = v.toFixed(3) + (isDefault ? ' ★' : '');
+      if (Math.abs(v - FRICTION) < 0.001) opt.selected = true;
+      frSel.appendChild(opt);
+    }
+    frSel.addEventListener('change', () => { FRICTION = +frSel.value; localStorage.setItem('sonara_friction', FRICTION); });
+    debugBar.appendChild(frLabel);
+    debugBar.appendChild(frSel);
+
+    const scLabel = document.createElement('span');
+    scLabel.textContent = 'Center:';
+    const scSel = document.createElement('select');
+    scSel.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 4px';
+    const centerOptions = [
+      { label: 'Listen', value: 'listen' },
+      { label: 'Turning', value: 'turning' },
+      { label: 'Sounds', value: 'sounds' },
+      { label: 'SONARA', value: 'sonara' },
+    ];
+    const savedCenter = localStorage.getItem('sonara_swirlCenter') || HERO_DEBUG_DEFAULTS.swirlCenter;
+    centerOptions.forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label + (o.value === HERO_DEBUG_DEFAULTS.swirlCenter ? ' ★' : '');
+      if (o.value === savedCenter) opt.selected = true;
+      scSel.appendChild(opt);
+    });
+    scSel.addEventListener('change', () => { swirlCenterTarget = scSel.value; localStorage.setItem('sonara_swirlCenter', swirlCenterTarget); });
+    debugBar.appendChild(scLabel);
+    debugBar.appendChild(scSel);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.textContent = 'Copy JSON';
+    copyBtn.style.cssText = 'background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px 8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 11ch;width:11ch;text-align:center;white-space:nowrap';
+    copyBtn.addEventListener('click', async () => {
+      const originalLabel = copyBtn.textContent;
+      copyBtn.disabled = true;
+
+      try {
+        await copyText(JSON.stringify(getDebugSettingsSnapshot(), null, 2));
+        copyBtn.textContent = 'Copied';
+      } catch (error) {
+        console.error('Failed to copy Sonara debug settings', error);
+        copyBtn.textContent = 'Copy failed';
+      }
+
+      window.setTimeout(() => {
+        copyBtn.textContent = originalLabel;
+        copyBtn.disabled = false;
+      }, 1200);
+    });
+    debugBar.appendChild(copyBtn);
   }
-  canvas.parentElement.appendChild(debugBar);
+  if (isLocal) {
+    canvas.parentElement.appendChild(debugBar);
+  }
+
+  // Swirl center target element
+  let swirlCenterTarget = localStorage.getItem('sonara_swirlCenter') || HERO_DEBUG_DEFAULTS.swirlCenter;
+  const swirlCenterEls = {
+    listen: listenBtn,
+    turning: document.querySelector('.hero-tagline'),
+    sounds: document.querySelector('.hero-expansion'),
+    sonara: document.querySelector('.hero-title'),
+  };
+
   let heroAudioPlaying = false;
   let audioIntensity = 0;
   let audioTransient = 0;
@@ -194,13 +361,12 @@ function initHeroCanvas() {
   let stopTime = 0;
   const MOUSE_SWIRL_FADE_MS = 5000;
   const MOUSE_SWIRL_RETURN_MS = 1000;
-  const MOUSE_INTERACTION_MULT = 0.67;
+  const MOUSE_INTERACTION_MULT = 0.33;
   const heroRmsData = new Uint8Array(128);
   let rmsSmooth = 0;
   let lastRippleTime = 0;
   let rippleClickTime = 0;
   const RIPPLE_BURST_DURATION = 10000;
-  const listenBtn = document.querySelector('#hero .listen-btn');
 
   function spawnRipple() {
     if (!listenBtn) return;
@@ -256,6 +422,7 @@ function initHeroCanvas() {
     uniform float u_seed;
     uniform float u_brightness;
     uniform float u_heroPlaying;
+    uniform float u_friction;
 
     uniform sampler2D u_rippleTex;
 
@@ -345,10 +512,10 @@ function initHeroCanvas() {
       if (localIntensity > 0.01 && proximity > 0.0) {
         float nx = dxB / dist;
         float ny = dyB / dist;
-        float swirlStr = localIntensity * proximity * 0.04;
+        float swirlStr = localIntensity * proximity * ${SWIRL_FORCE};
         vx += -ny * swirlStr;
         vy += nx * swirlStr;
-        float pull = localIntensity * proximity * 0.012;
+        float pull = localIntensity * proximity * ${PULL_FORCE};
         vx -= nx * pull;
         vy -= ny * pull;
         float jit = react * 0.25 * localIntensity;
@@ -376,16 +543,16 @@ function initHeroCanvas() {
         if (d2 < 336400.0) {
           float mdist = sqrt(d2);
           float mprox = 1.0 - mdist / 580.0;
-          float force = mprox * 0.00006 * u_mouseSwirlMix * 0.67;
-          float swirl = mprox * 0.00008 * u_mouseSwirlMix * 0.67;
+          float force = mprox * 0.00006 * u_mouseSwirlMix * 0.33;
+          float swirl = mprox * 0.00008 * u_mouseSwirlMix * 0.33;
           vx += dmx * force + dmy * swirl;
           vy += dmy * force + (-dmx) * swirl;
         }
       }
 
       // Damping
-      vx *= 0.985;
-      vy *= 0.985;
+      vx *= u_friction;
+      vy *= u_friction;
 
       // Edge wrapping (horizontal wrap, vertical mirror-bounce)
       if (x < 0.0) x = u_resolution.x;
@@ -556,6 +723,7 @@ function initHeroCanvas() {
       u_seed:           gl.getUniformLocation(tfUpdateProg, 'u_seed'),
       u_brightness:     gl.getUniformLocation(tfUpdateProg, 'u_brightness'),
       u_heroPlaying:    gl.getUniformLocation(tfUpdateProg, 'u_heroPlaying'),
+      u_friction:       gl.getUniformLocation(tfUpdateProg, 'u_friction'),
       u_rippleTex:      gl.getUniformLocation(tfUpdateProg, 'u_rippleTex'),
     };
 
@@ -862,14 +1030,15 @@ function initHeroCanvas() {
     rippleHead = (rippleHead + 1) % RIPPLE_BUF_LEN;
     rippleBuf[rippleHead] = Math.min(1, audioIntensity * 0.68 + audioTransient * 0.68);
 
-    // Button center (shared)
+    // Swirl center (based on selected target element)
     let btnCX = w * 0.5, btnCY = h * 0.5;
-    if (!isMobileView && listenBtn) {
-      const btnRect = listenBtn.getBoundingClientRect();
-      if (btnRect.width > 0) {
+    const centerEl = swirlCenterEls[swirlCenterTarget] || listenBtn;
+    if (!isMobileView && centerEl) {
+      const elRect = centerEl.getBoundingClientRect();
+      if (elRect.width > 0) {
         const canRect = canvas.getBoundingClientRect();
-        btnCX = (btnRect.left + btnRect.width * 0.5 - canRect.left) * (w / canRect.width);
-        btnCY = (btnRect.top + btnRect.height * 0.5 - canRect.top) * (h / canRect.height);
+        btnCX = (elRect.left + elRect.width * 0.5 - canRect.left) * (w / canRect.width);
+        btnCY = (elRect.top + elRect.height * 0.5 - canRect.top) * (h / canRect.height);
       }
     }
 
@@ -919,13 +1088,14 @@ function initHeroCanvas() {
       gl.uniform1f(tfLoc.u_audioTransient, audioTransient);
       gl.uniform1f(tfLoc.u_mouseX, mx);
       gl.uniform1f(tfLoc.u_mouseY, my);
-      gl.uniform1f(tfLoc.u_mouseSwirlMix, mouseSwirlMix);
+      gl.uniform1f(tfLoc.u_mouseSwirlMix, mouseActive ? mouseSwirlMix : 0);
       gl.uniform2f(tfLoc.u_btnCenter, btnCX, btnCY);
       gl.uniform2f(tfLoc.u_resolution, w, h);
       gl.uniform1i(tfLoc.u_rippleHead, rippleHead);
       gl.uniform1f(tfLoc.u_seed, Math.random() * 1000);
       gl.uniform1f(tfLoc.u_brightness, HERO_PARTICLE_BRIGHTNESS);
       gl.uniform1f(tfLoc.u_heroPlaying, heroAudioPlaying ? 1.0 : 0.0);
+      gl.uniform1f(tfLoc.u_friction, FRICTION);
       gl.uniform1i(tfLoc.u_rippleTex, 0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -1202,10 +1372,10 @@ function initHeroCanvas() {
           const proximity = Math.max(0, 1 - dist / swirlRadius);
           if (localIntensity > 0.01 && proximity > 0) {
             const nx = dxB / dist, ny = dyB / dist;
-            const swirlStr = localIntensity * proximity * 0.04;
+            const swirlStr = localIntensity * proximity * SWIRL_FORCE;
             p.vx += -ny * swirlStr;
             p.vy += nx * swirlStr;
-            const pull = localIntensity * proximity * 0.012;
+            const pull = localIntensity * proximity * PULL_FORCE;
             p.vx -= nx * pull;
             p.vy -= ny * pull;
             const jit = react * 0.25 * localIntensity;
@@ -1220,8 +1390,8 @@ function initHeroCanvas() {
           }
         }
 
-        // Mouse attraction/swirl
-        if (mouseSwirlMix > 0.001) {
+        // Mouse attraction/swirl (only after first real mouse movement)
+        if (mouseActive && mouseSwirlMix > 0.001) {
           const dmx = mx - p.x, dmy = my - p.y;
           const d2 = dmx * dmx + dmy * dmy;
           if (d2 < 336400) {
@@ -1234,8 +1404,8 @@ function initHeroCanvas() {
           }
         }
 
-        p.vx *= 0.985;
-        p.vy *= 0.985;
+        p.vx *= FRICTION;
+        p.vy *= FRICTION;
 
         // Edge wrapping
         let wrapped = false;
@@ -1302,11 +1472,13 @@ function initHeroCanvas() {
     }
 
     const burstCount = aliveCount - autoCount;
-    fpsEl.textContent = `${fpsValue} fps`;
-    autoStat.statValueEl.textContent = `${autoCount}`;
-    burstStat.statValueEl.textContent = `${burstCount}`;
-    totalStat.statValueEl.textContent = `${aliveCount}`;
-    highWaterEl.textContent = GPU_PHYSICS ? `HW:${highWater}` : '';
+    if (isLocal) {
+      fpsEl.textContent = `${fpsValue} fps`;
+      autoStat.statValueEl.textContent = `${autoCount}`;
+      burstStat.statValueEl.textContent = `${burstCount}`;
+      totalStat.statValueEl.textContent = `${aliveCount}`;
+      highWaterEl.textContent = GPU_PHYSICS ? `HW:${highWater}` : '';
+    }
     requestAnimationFrame(draw);
   }
 
@@ -1514,7 +1686,7 @@ function initHeroCanvas2D() {
         if (audioIntensity > 0.01 && proximity > 0) { const nx = dcx / dist, ny = dcy / dist; p.vx += -ny * audioIntensity * proximity * 0.04; p.vy += nx * audioIntensity * proximity * 0.04; const pull = audioIntensity * proximity * 0.012; p.vx -= nx * pull; p.vy -= ny * pull; const jit = react * 0.25 * audioIntensity; p.vx += (Math.random() - 0.5) * jit; p.vy += (Math.random() - 0.5) * jit; }
         if (audioIntensity < 0.5 && audioIntensity > 0.001 && !heroAudioPlaying && dist > 1) { const nx = dcx / dist, ny = dcy / dist; p.vx += nx * (0.5 - audioIntensity) * 0.008; p.vy += ny * (0.5 - audioIntensity) * 0.008; } }
       if (!listenBtn || !listenBtn.classList.contains('playing')) { const dmx = mx - p.x, dmy = my - p.y, d2 = dmx * dmx + dmy * dmy; if (d2 < 122500) { const mdist = Math.sqrt(d2), proximity = 1 - mdist / 350; p.vx += dmx * proximity * 0.00012 * MOUSE_INTERACTION_MULT + dmy * proximity * 0.00015 * MOUSE_INTERACTION_MULT; p.vy += dmy * proximity * 0.00012 * MOUSE_INTERACTION_MULT + (-dmx) * proximity * 0.00015 * MOUSE_INTERACTION_MULT; } }
-      p.vx *= 0.985; p.vy *= 0.985;
+      p.vx *= FRICTION; p.vy *= FRICTION;
       if (p.x < 0) p.x = w; if (p.x > w) p.x = 0; if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
     }
     if (glowList.length > 0) { c.fillStyle = `rgba(212,168,67,${0.06 + audioIntensity * 0.08})`; c.beginPath(); for (let g = 0; g < glowList.length; g += 3) { c.moveTo(glowList[g] + glowList[g + 2], glowList[g + 1]); c.arc(glowList[g], glowList[g + 1], glowList[g + 2], 0, Math.PI * 2); } c.fill(); }
