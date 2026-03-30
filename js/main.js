@@ -400,6 +400,7 @@ import { initVisuals } from './visuals.js?v=8';
       if (!soundId) return;
       if (btn.classList.contains('listen-btn')) {
         btn.classList.add('settled');
+        updateHeroHintPosition();
       }
       // Show scroll hint after 4s on first listen click, then pulse later
       if (btn.classList.contains('listen-btn')) {
@@ -522,6 +523,7 @@ import { initVisuals } from './visuals.js?v=8';
       entries.forEach(entry => {
         if (scrollHint.dataset.dismissed === '1') return;
         if (entry.isIntersecting) {
+          updateHeroHintPosition();
           scrollHint.style.opacity = '';
         } else {
           if (!heroHintIsArmed()) return;
