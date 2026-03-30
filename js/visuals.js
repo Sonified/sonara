@@ -182,6 +182,7 @@ function initHeroCanvas() {
   const DEBUG_SELECT_STYLE = `background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px`;
   const DEBUG_COPY_BUTTON_STYLE = `background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 11ch;width:11ch;text-align:center;white-space:nowrap`;
   const DEBUG_TOGGLE_BUTTON_STYLE = `position:fixed;top:12px;right:12px;z-index:10000;background:rgba(10,10,12,0.1);color:rgba(228,188,88,0.4);border:1px solid rgba(228,188,88,0.09);font:bold 14px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;text-transform:lowercase;box-shadow:0 0 6px rgba(228,188,88,0.025)`;
+  const DEBUG_HUD_VISIBLE_KEY = 'sonara_debugHudVisible';
   const appendDebugPair = (rowEl, labelText, controlEl) => {
     const pairEl = document.createElement('span');
     pairEl.style.cssText = `display:inline-flex;align-items:center;gap:${DEBUG_PAIR_GAP}px;white-space:nowrap`;
@@ -194,7 +195,7 @@ function initHeroCanvas() {
   };
   const debugBar = document.createElement('div');
   debugBar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:9999;color:#00ccff;font:bold 18px/1 monospace;display:flex;flex-direction:column;align-items:flex-start;gap:8px';
-  let debugHudVisible = true;
+  let debugHudVisible = localStorage.getItem(DEBUG_HUD_VISIBLE_KEY) !== '0';
   const debugTopRow = document.createElement('div');
   debugTopRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_TOP_ROW_GAP}px`;
   const debugSecondRow = document.createElement('div');
@@ -207,6 +208,7 @@ function initHeroCanvas() {
   const syncDebugHudVisibility = () => {
     debugBar.style.display = debugHudVisible ? 'flex' : 'none';
     debugToggleBtn.textContent = debugHudVisible ? 'hide' : 'show';
+    localStorage.setItem(DEBUG_HUD_VISIBLE_KEY, debugHudVisible ? '1' : '0');
   };
   if (isLocal) {
     debugBar.addEventListener('change', (e) => {
@@ -809,19 +811,23 @@ function initHeroCanvas() {
     in vec2 a_position;
     in float a_size;
     in float a_alpha;
+    in float a_whiten;
     uniform vec2 u_resolution;
     out float v_alpha;
+    out float v_whiten;
     void main() {
       vec2 clip = (a_position / u_resolution) * 2.0 - 1.0;
       clip.y = -clip.y;
       gl_Position = vec4(clip, 0.0, 1.0);
       gl_PointSize = a_size;
       v_alpha = a_alpha;
+      v_whiten = a_whiten;
     }`;
 
   const PARTICLE_FS = `#version 300 es
     precision mediump float;
     in float v_alpha;
+    in float v_whiten;
     uniform float u_glowAlpha;
     out vec4 fragColor;
     void main() {
@@ -835,7 +841,9 @@ function initHeroCanvas() {
       float hasGlow = step(0.15, v_alpha);
       float alpha = coreAlpha * v_alpha + glowFade * u_glowAlpha * v_alpha * hasGlow;
       if (alpha < 0.002) discard;
-      fragColor = vec4(0.831 * alpha, 0.659 * alpha, 0.263 * alpha, alpha);
+      vec3 gold = vec3(0.831, 0.659, 0.263);
+      vec3 col = mix(gold, vec3(0.58, 0.58, 0.62), v_whiten);
+      fragColor = vec4(col * alpha, alpha);
     }`;
 
   const LINE_VS = `#version 300 es
@@ -899,6 +907,7 @@ function initHeroCanvas() {
     position:   gl.getAttribLocation(particleProg, 'a_position'),
     size:       gl.getAttribLocation(particleProg, 'a_size'),
     alpha:      gl.getAttribLocation(particleProg, 'a_alpha'),
+    whiten:     gl.getAttribLocation(particleProg, 'a_whiten'),
     resolution: gl.getUniformLocation(particleProg, 'u_resolution'),
     glowAlpha:  gl.getUniformLocation(particleProg, 'u_glowAlpha'),
   };
@@ -986,6 +995,7 @@ function initHeroCanvas() {
       gl.vertexAttribPointer(pLoc.size, 1, gl.FLOAT, false, STRIDE, 56);
       gl.enableVertexAttribArray(pLoc.alpha);
       gl.vertexAttribPointer(pLoc.alpha, 1, gl.FLOAT, false, STRIDE, 60);
+      if (pLoc.whiten >= 0) gl.vertexAttrib1f(pLoc.whiten, 0.0);
       gl.bindVertexArray(null);
       return vao;
     }
@@ -1012,7 +1022,7 @@ function initHeroCanvas() {
 
   // --- CPU-only resources ---
   let particles = [];
-  const PFLOATS = 4; // x, y, size, alpha per particle
+  const PFLOATS = 5; // x, y, size, alpha, whiten per particle
   let particleData, particleBuf, cpuRenderVAO;
 
   if (!GPU_PHYSICS) {
@@ -1024,11 +1034,13 @@ function initHeroCanvas() {
     gl.bindVertexArray(cpuRenderVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, particleBuf);
     gl.enableVertexAttribArray(pLoc.position);
-    gl.vertexAttribPointer(pLoc.position, 2, gl.FLOAT, false, 16, 0);
+    gl.vertexAttribPointer(pLoc.position, 2, gl.FLOAT, false, 20, 0);
     gl.enableVertexAttribArray(pLoc.size);
-    gl.vertexAttribPointer(pLoc.size, 1, gl.FLOAT, false, 16, 8);
+    gl.vertexAttribPointer(pLoc.size, 1, gl.FLOAT, false, 20, 8);
     gl.enableVertexAttribArray(pLoc.alpha);
-    gl.vertexAttribPointer(pLoc.alpha, 1, gl.FLOAT, false, 16, 12);
+    gl.vertexAttribPointer(pLoc.alpha, 1, gl.FLOAT, false, 20, 12);
+    gl.enableVertexAttribArray(pLoc.whiten);
+    gl.vertexAttribPointer(pLoc.whiten, 1, gl.FLOAT, false, 20, 16);
     gl.bindVertexArray(null);
   }
 
@@ -1078,6 +1090,7 @@ function initHeroCanvas() {
   const CONN_FADE_IN = 0.04;
   const CONN_FADE_OUT = 0.025;
   let connSearchFrame = 0;
+  let neighborCount = new Uint8Array(BUFFER_CAP);
 
   let nextPid = 0;
 
@@ -1180,7 +1193,8 @@ function initHeroCanvas() {
           alpha: Math.random() * 0.4 + 0.1,
           phase: Math.random() * Math.PI * 2,
           reactivity: 0.3 + Math.random() * 0.7,
-          rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
+          rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
+          canWhiten: Math.random() < 0.30
         });
       }
     }
@@ -1435,7 +1449,8 @@ function initHeroCanvas() {
           vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
           r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
           phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120,
-          rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
+          rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
+          canWhiten: Math.random() < 0.30
         });
       }
 
@@ -1486,7 +1501,8 @@ function initHeroCanvas() {
         if (cell) { cell.push(i); } else { grid.set(key, [i]); }
       }
 
-      const connCount = new Uint8Array(pCount);
+      neighborCount.fill(0);
+      const connCount = neighborCount;
       const aiBrightBoost = 1 + lineIntensity * 2;
       const LINE_BASE = 0.08;
       const lineAlphas = [
@@ -1599,11 +1615,15 @@ function initHeroCanvas() {
         const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * HERO_PARTICLE_BRIGHTNESS);
         const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
 
-        // Fill GPU buffer
+        // Fill GPU buffer — color shift from speed + local density
+        const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+        const density = neighborCount[i] / MAX_CONN; // 0-1 based on connection saturation
+        const wt = p.canWhiten ? Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4) : 0;
         particleData[pIdx++] = p.x;
         particleData[pIdx++] = p.y;
         particleData[pIdx++] = Math.max(3, currentR * 6);
         particleData[pIdx++] = currentAlpha;
+        particleData[pIdx++] = wt;
 
         // Physics: position update
         p.x += p.vx;
@@ -1795,7 +1815,8 @@ function initHeroCanvas() {
           life: 1,
           decay: 0.0003 + Math.random() * 0.0007,
           age: 0, fadeIn: 15 + Math.floor(Math.random() * 15),
-          rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
+          rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
+          canWhiten: Math.random() < 0.30
         });
       }
     }
@@ -1887,7 +1908,8 @@ function initHeroCanvas2D() {
         x: Math.random() * w, y: Math.random() * h,
         vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
         r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
-        phase: Math.random() * Math.PI * 2, reactivity: 0.3 + Math.random() * 0.7
+        phase: Math.random() * Math.PI * 2, reactivity: 0.3 + Math.random() * 0.7,
+        canWhiten: Math.random() < 0.30
       });
     }
   }
@@ -1943,7 +1965,7 @@ function initHeroCanvas2D() {
     const audioRate2d = 0.15 + 0.4 * (1 - fillRatio2d);
     const spawnRate = activityLevel > 0.01 ? audioRate2d * 2 : 0.15;
     if (particles.length < 2000 && Math.random() < spawnRate) {
-      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120 });
+      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120, canWhiten: Math.random() < 0.30 });
     }
     const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
     for (let i = 0; i < particles.length; i++) { const p = particles[i]; const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols; const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]); }
@@ -1961,7 +1983,9 @@ function initHeroCanvas2D() {
       const audioBoost = brightnessLevel * react * (0.8 + Math.sin(time * 3.7 + p.phase * 2) * 0.3);
       const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
-      c.fillStyle = `rgba(212,168,67,${currentAlpha})`;
+      let pr = 212, pg = 168, pb = 67;
+      if (p.canWhiten) { const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy), density = connCount[i] / MAX_CONN, t = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4); pr += (191 - 212) * t; pg += (191 - 168) * t; pb += (199 - 67) * t; }
+      c.fillStyle = `rgba(${pr|0},${pg|0},${pb|0},${currentAlpha})`;
       if (currentR < 1.5) { const s = currentR * 2; c.fillRect(p.x - currentR, p.y - currentR, s, s); } else { c.beginPath(); c.arc(p.x, p.y, currentR, 0, Math.PI * 2); c.fill(); }
       if (currentAlpha > 0.35) glowList.push(p.x, p.y, currentR * 3);
       p.x += p.vx; p.y += p.vy;
@@ -1984,7 +2008,7 @@ function initHeroCanvas2D() {
     const cx = (e.clientX - rect.left) * scaleX, cy = (e.clientY - rect.top) * scaleY;
     const count = heroDragging ? 1 : 1 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) { const angle = Math.random() * Math.PI * 2, speed = 0.3 + Math.random() * 0.6, baseAlpha = 0.3 + Math.random() * 0.2;
-      particles.push({ x: cx + (Math.random() - 0.5) * 20, y: cy + (Math.random() - 0.5) * 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r: Math.random() * 2 + 0.5, alpha: baseAlpha, baseAlpha, phase: Math.random() * Math.PI * 2, life: 1, decay: 0.0003 + Math.random() * 0.0007, age: 0, fadeIn: 80 + Math.floor(Math.random() * 80) }); }
+      particles.push({ x: cx + (Math.random() - 0.5) * 20, y: cy + (Math.random() - 0.5) * 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r: Math.random() * 2 + 0.5, alpha: baseAlpha, baseAlpha, phase: Math.random() * Math.PI * 2, life: 1, decay: 0.0003 + Math.random() * 0.0007, age: 0, fadeIn: 80 + Math.floor(Math.random() * 80), canWhiten: Math.random() < 0.30 }); }
   }
   heroEl.addEventListener('mousedown', (e) => { heroDragging = true; spawnBurst(e); });
   heroEl.addEventListener('mousemove', (e) => { if (heroDragging) spawnBurst(e); });
@@ -2403,7 +2427,7 @@ function initEduCanvas() {
 
       // Subtle drift
       s.y -= s.speed;
-      if (s.y < -5) {
+      if (s.y < -2) {
         if (s.age !== undefined) {
           // User-spawned: kill it
           stars.splice(i, 1);
