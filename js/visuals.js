@@ -10,6 +10,14 @@ const getCitizenAnalyser = typeof audio.getCitizenAnalyser === 'function'
   ? audio.getCitizenAnalyser
   : () => null;
 
+// Unified rAF loop — all canvas draw functions register here
+const drawCallbacks = [];
+function registerDraw(fn) { drawCallbacks.push(fn); }
+function rafLoop() {
+  for (let i = 0; i < drawCallbacks.length; i++) drawCallbacks[i]();
+  requestAnimationFrame(rafLoop);
+}
+
 let mouseX = 0, mouseY = 0;
 let mouseActive = false;
 document.addEventListener('mousemove', (e) => {
@@ -1290,7 +1298,7 @@ function initHeroCanvas() {
 
   // ─── draw ────────────────────────────────────────────────────────────
   function draw() {
-    if (!heroVis.visible) { requestAnimationFrame(draw); return; }
+    if (!heroVis.visible) return;
     time += 0.005;
     const now = performance.now();
 
@@ -1839,26 +1847,25 @@ function initHeroCanvas() {
 
     if (isLocal && debugHudVisible) {
       fpsFrames++;
-      if (now - fpsLastTime >= 1000) {
-        fpsValue = fpsFrames;
-        fpsFrames = 0;
-        fpsLastTime = now;
-      }
       const frameTime = performance.now() - now;
       ftSmooth += (frameTime - ftSmooth) * 0.1;
-      const budget = 1000 / (fpsValue || 60);
-      const pct = Math.round(ftSmooth / budget * 100);
-      ftEl.textContent = `${pct}%`;
-      ftEl.style.color = pct < 50 ? '#4caf50' : pct < 75 ? '#f0c040' : '#f44336';
+      if (now - fpsLastTime >= 500) {
+        fpsValue = Math.round(fpsFrames * (1000 / (now - fpsLastTime)));
+        fpsFrames = 0;
+        fpsLastTime = now;
+        fpsEl.textContent = `${fpsValue} fps`;
+        const budget = 1000 / (fpsValue || 60);
+        const pct = Math.round(ftSmooth / budget * 100);
+        ftEl.textContent = `${pct}%`;
+        ftEl.style.color = pct < 50 ? '#4caf50' : pct < 75 ? '#f0c040' : '#f44336';
+      }
       const burstCount = aliveCount - autoCount;
       debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
-      fpsEl.textContent = `${fpsValue} fps`;
       autoStat.statValueEl.textContent = `${autoCount}`;
       burstStat.statValueEl.textContent = `${burstCount}`;
       totalStat.statValueEl.textContent = `${aliveCount}`;
       highWaterEl.textContent = GPU_PHYSICS ? `HW:${highWater}` : '';
     }
-    requestAnimationFrame(draw);
   }
 
   // ─── Click + drag to spawn bursts ────────────────────────────────────
@@ -1948,7 +1955,7 @@ function initHeroCanvas() {
   });
   resize();
   init();
-  draw();
+  registerDraw(draw);
 }
 
 
@@ -2013,7 +2020,7 @@ function initHeroCanvas2D() {
   }
 
   function draw() {
-    if (!heroVis.visible) { requestAnimationFrame(draw); return; }
+    if (!heroVis.visible) return;
     c.clearRect(0, 0, w, h);
     time += 0.005;
     const whiteParticleColor = getWhiteParticleColor();
@@ -2103,7 +2110,6 @@ function initHeroCanvas2D() {
       if (p.x < 0) p.x = w; if (p.x > w) p.x = 0; if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
     }
     if (glowList.length > 0) { c.fillStyle = `rgba(212,168,67,${0.06 + brightnessLevel * 0.08})`; c.beginPath(); for (let g = 0; g < glowList.length; g += 3) { c.moveTo(glowList[g] + glowList[g + 2], glowList[g + 1]); c.arc(glowList[g], glowList[g + 1], glowList[g + 2], 0, Math.PI * 2); } c.fill(); }
-    requestAnimationFrame(draw);
   }
 
   let heroDragging = false;
@@ -2120,7 +2126,7 @@ function initHeroCanvas2D() {
   heroEl.addEventListener('mousemove', (e) => { if (heroDragging) spawnBurst(e); });
   window.addEventListener('mouseup', () => { heroDragging = false; });
   window.addEventListener('resize', () => { resize(); init(); });
-  resize(); init(); draw();
+  resize(); init(); registerDraw(draw);
 }
 
 // ===== Vision: Drifting luminous nebula orbs =====
@@ -2199,7 +2205,7 @@ function initVisionCanvas() {
   // mxV/myV updated from global mouseX/mouseY in draw loop
 
   function draw() {
-    if (!vis.visible) { requestAnimationFrame(draw); return; }
+    if (!vis.visible) return;
     c.clearRect(0, 0, w, h);
     time += 0.003 * ORB_MOTION_MULT;
 
@@ -2249,12 +2255,11 @@ function initVisionCanvas() {
       if (orb.y > h + pad) orb.y = -pad;
     });
 
-    requestAnimationFrame(draw);
   }
 
   window.addEventListener('resize', resize);
   resize();
-  draw();
+  registerDraw(draw);
 }
 
 // ===== Citizen Science: Waveform with discovery markers =====
@@ -2298,7 +2303,7 @@ function initCSCanvas() {
   }
 
   function draw() {
-    if (!vis.visible) { requestAnimationFrame(draw); return; }
+    if (!vis.visible) return;
     c.clearRect(0, 0, w, h);
 
     // Drive waveform speed from live audio amplitude for "Hear a discovery".
@@ -2408,12 +2413,11 @@ function initCSCanvas() {
     c.fillRect(w - fadeW, 0, fadeW, h);
     c.restore();
 
-    requestAnimationFrame(draw);
   }
 
   window.addEventListener('resize', resize);
   resize();
-  draw();
+  registerDraw(draw);
 }
 
 // ===== Education: Dome starfield =====
@@ -2496,7 +2500,7 @@ function initEduCanvas() {
   }
 
   function draw() {
-    if (!vis.visible) { requestAnimationFrame(draw); return; }
+    if (!vis.visible) return;
     c.clearRect(0, 0, w, h);
     time += 0.01;
 
@@ -2567,7 +2571,6 @@ function initEduCanvas() {
       spawnStarsAt(emitX, emitY, { count: spawnCount, spread: 24, speedMul: AUTO_EMITTER_SPEED, auto: true });
     }
 
-    requestAnimationFrame(draw);
   }
 
   // Click + drag to add stars
@@ -2589,7 +2592,7 @@ function initEduCanvas() {
 
   window.addEventListener('resize', resize);
   resize();
-  draw();
+  registerDraw(draw);
 }
 
 // ===== Synth Wave Canvas (in the instrument card) =====
@@ -2611,7 +2614,7 @@ function initSynthWave() {
   let liveBlend = 0; // 0 = idle sine, 1 = full oscilloscope
 
   function draw() {
-    if (!vis.visible) { requestAnimationFrame(draw); return; }
+    if (!vis.visible) return;
     c.clearRect(0, 0, w, h);
     time += 0.00616;
 
@@ -2684,13 +2687,12 @@ function initSynthWave() {
     c.fillStyle = `rgba(139, 110, 192, ${0.025 + liveBlend * 0.055})`;
     c.fill();
 
-    requestAnimationFrame(draw);
   }
 
   const observer = new ResizeObserver(resize);
   observer.observe(canvas.parentElement);
   resize();
-  draw();
+  registerDraw(draw);
 }
 
 // ===== Spectrum: Animated EQ bars for STEM + Music =====
@@ -2726,7 +2728,7 @@ function initSpectrumCanvas() {
   const smoothedBars = new Float32Array(BAR_COUNT); // smoothed EQ values per bar
 
   function draw() {
-    if (!vis2.visible) { requestAnimationFrame(draw); return; }
+    if (!vis2.visible) return;
     c.clearRect(0, 0, w, h);
     const stemPlaying = !!getStemAnalyser();
     time += stemPlaying ? 0.0008 : 0.0004;
@@ -2824,12 +2826,11 @@ function initSpectrumCanvas() {
       c.fillRect(x + 1, centerY, barWidth - 2, barHeight * 0.4);
     }
 
-    requestAnimationFrame(draw);
   }
 
   window.addEventListener('resize', resize);
   resize();
-  draw();
+  registerDraw(draw);
 }
 
 // ===== Globe: Spinning dot globe for Get Involved =====
@@ -2932,7 +2933,7 @@ function initGlobeCanvas() {
   const RING_SEGMENTS = 64;
 
   function draw() {
-    if (!vis.visible) { requestAnimationFrame(draw); return; }
+    if (!vis.visible) return;
     c.clearRect(0, 0, w, h);
     time += 0.003;
 
@@ -3180,12 +3181,11 @@ function initGlobeCanvas() {
       }
     }
 
-    requestAnimationFrame(draw);
   }
 
   window.addEventListener('resize', resize);
   resize();
-  draw();
+  registerDraw(draw);
 }
 
 // Init all
@@ -3197,4 +3197,5 @@ export function initVisuals() {
   initSynthWave();
   initSpectrumCanvas();
   initGlobeCanvas();
+  requestAnimationFrame(rafLoop);
 }
