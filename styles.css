@@ -1807,6 +1807,8 @@ a:hover { opacity: 0.7; }
   grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 0.7rem;
   width: 100%;
+  /* Flip to "visible" to show logos — layout stays the same either way */
+  visibility: hidden;
 }
 
 .partner-logo {
