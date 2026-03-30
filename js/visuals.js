@@ -64,7 +64,7 @@ const HERO_DEBUG_DEFAULTS = {
   spinAttack: 0.6,
   spinRelease: 0.46,
   connDist: 170,
-  maxConn: 3,
+  maxConn: 2,
   connSkip: 5,
   whiteParticlePct: 15,
   whiteBrightnessCap: 60,
@@ -165,7 +165,9 @@ function initHeroCanvas() {
   const BUFFER_CAP = 12000; // sized for max dropdown value (11000) + headroom for burst spawns
   let time = 0;
   let lineIntensity = 0;
-  let fpsFrames = 0, fpsLastTime = performance.now(), fpsValue = 0;
+  const DEBUG_HUD_UPDATE_FPS = 4;
+  const DEBUG_HUD_UPDATE_MS = 1000 / DEBUG_HUD_UPDATE_FPS;
+  let fpsFrames = 0, debugHudLastUpdate = performance.now(), fpsValue = 0;
   const HERO_PARTICLE_BRIGHTNESS = 1.15;
   let CONN_REACH = +(localStorage.getItem('sonara_connDist') || HERO_DEBUG_DEFAULTS.connDist);
   let CONN_REACH_SQ = CONN_REACH * CONN_REACH;
@@ -255,7 +257,7 @@ function initHeroCanvas() {
     if (!debugHudVisible) {
       fpsFrames = 0;
       fpsValue = 0;
-      fpsLastTime = performance.now();
+      debugHudLastUpdate = performance.now();
       ftSmooth = 0;
       fpsEl.textContent = '';
       ftEl.textContent = '';
@@ -1849,22 +1851,23 @@ function initHeroCanvas() {
       fpsFrames++;
       const frameTime = performance.now() - now;
       ftSmooth += (frameTime - ftSmooth) * 0.1;
-      if (now - fpsLastTime >= 500) {
-        fpsValue = Math.round(fpsFrames * (1000 / (now - fpsLastTime)));
+      const hudElapsed = now - debugHudLastUpdate;
+      if (hudElapsed >= DEBUG_HUD_UPDATE_MS) {
+        fpsValue = Math.round(fpsFrames * (1000 / hudElapsed));
         fpsFrames = 0;
-        fpsLastTime = now;
+        debugHudLastUpdate = now;
         fpsEl.textContent = `${fpsValue} fps`;
         const budget = 1000 / (fpsValue || 60);
         const pct = Math.round(ftSmooth / budget * 100);
         ftEl.textContent = `${pct}%`;
         ftEl.style.color = pct < 50 ? '#4caf50' : pct < 75 ? '#f0c040' : '#f44336';
+        const burstCount = aliveCount - autoCount;
+        debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
+        autoStat.statValueEl.textContent = `${autoCount}`;
+        burstStat.statValueEl.textContent = `${burstCount}`;
+        totalStat.statValueEl.textContent = `${aliveCount}`;
+        highWaterEl.textContent = GPU_PHYSICS ? `HW:${highWater}` : '';
       }
-      const burstCount = aliveCount - autoCount;
-      debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
-      autoStat.statValueEl.textContent = `${autoCount}`;
-      burstStat.statValueEl.textContent = `${burstCount}`;
-      totalStat.statValueEl.textContent = `${aliveCount}`;
-      highWaterEl.textContent = GPU_PHYSICS ? `HW:${highWater}` : '';
     }
   }
 
@@ -2075,7 +2078,7 @@ function initHeroCanvas2D() {
     }
     const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
     for (let i = 0; i < particles.length; i++) { const p = particles[i]; const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols; const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]); }
-    const buckets = [[], [], [], [], []], MAX_CONN = 3, connCount = new Uint8Array(particles.length);
+    const buckets = [[], [], [], [], []], MAX_CONN = 2, connCount = new Uint8Array(particles.length);
     for (const [key, cell] of grid) { const gx = key % cols, gy = (key / cols) | 0; for (let nx = gx; nx <= gx + 1; nx++) { for (let ny = gy - 1; ny <= gy + 1; ny++) { if (nx === gx && ny < gy) continue; const nk = nx + ny * cols, neighbor = nk === key ? cell : grid.get(nk); if (!neighbor) continue; for (let ii = 0; ii < cell.length; ii++) { const ai = cell[ii]; if (connCount[ai] >= MAX_CONN) continue; const a = particles[ai], jStart = nk === key ? ii + 1 : 0; for (let jj = jStart; jj < neighbor.length; jj++) { const bi = neighbor[jj]; if (connCount[bi] >= MAX_CONN) continue; const b = particles[bi], dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy; if (d2 < 19600) { buckets[Math.min((d2 / 3920) | 0, 4)].push(a.x, a.y, b.x, b.y); connCount[ai]++; connCount[bi]++; } } } } } }
     c.lineWidth = 0.5 + brightnessLevel * 0.5;
     const aiBB = 1 + brightnessLevel * 2, als = [0.06 * aiBB, 0.048 * aiBB, 0.036 * aiBB, 0.024 * aiBB, 0.012 * aiBB];
