@@ -2008,8 +2008,11 @@ function initVisionCanvas() {
   let mxV = 0, myV = 0; // mouse position in canvas coords
 
   function resize() {
-    w = canvas.width = canvas.offsetWidth;
-    h = canvas.height = canvas.offsetHeight;
+    const dpr = window.devicePixelRatio > 1 ? 1.5 : 1;
+    w = canvas.width = canvas.offsetWidth * dpr;
+    h = canvas.height = canvas.offsetHeight * dpr;
+    canvas.style.width = canvas.offsetWidth + 'px';
+    canvas.style.height = canvas.offsetHeight + 'px';
     initOrbs();
   }
 
@@ -2061,10 +2064,10 @@ function initVisionCanvas() {
     c.clearRect(0, 0, w, h);
     time += 0.003 * ORB_MOTION_MULT;
 
-    // Convert global mouse to canvas-local coords
+    // Convert global mouse to canvas-local coords (DPR-scaled)
     const rect = canvas.getBoundingClientRect();
-    mxV = mouseX - rect.left;
-    myV = mouseY - rect.top;
+    mxV = (mouseX - rect.left) * (w / rect.width);
+    myV = (mouseY - rect.top) * (h / rect.height);
 
     orbs.forEach(orb => {
       // Lifecycle: smooth fade in and out
@@ -2297,8 +2300,11 @@ function initEduCanvas() {
   };
 
   function resize() {
-    w = canvas.width = canvas.offsetWidth;
-    h = canvas.height = canvas.offsetHeight;
+    const dpr = window.devicePixelRatio > 1 ? 1.5 : 1;
+    w = canvas.width = canvas.offsetWidth * dpr;
+    h = canvas.height = canvas.offsetHeight * dpr;
+    canvas.style.width = canvas.offsetWidth + 'px';
+    canvas.style.height = canvas.offsetHeight + 'px';
     initStars();
   }
 
@@ -2422,8 +2428,9 @@ function initEduCanvas() {
 
   function spawnStars(e) {
     const rect = canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
+    const scaleX = w / rect.width, scaleY = h / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
     const count = domeDragging ? 2 + Math.floor(Math.random() * 2) : 5 + Math.floor(Math.random() * 4);
     spawnStarsAt(cx, cy, { count, spread: 40, speedMul: 1 });
   }
