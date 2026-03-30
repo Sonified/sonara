@@ -2008,12 +2008,21 @@ function initVisionCanvas() {
   let mxV = 0, myV = 0; // mouse position in canvas coords
 
   function resize() {
+    const oldW = w, oldH = h;
     const dpr = window.devicePixelRatio > 1 ? 1.5 : 1;
     w = canvas.width = canvas.offsetWidth * dpr;
     h = canvas.height = canvas.offsetHeight * dpr;
     canvas.style.width = canvas.offsetWidth + 'px';
     canvas.style.height = canvas.offsetHeight + 'px';
-    initOrbs();
+    if (!orbs.length) {
+      initOrbs();
+    } else if (oldW && oldH) {
+      const sx = w / oldW, sy = h / oldH;
+      for (const orb of orbs) {
+        orb.x *= sx;
+        orb.y *= sy;
+      }
+    }
   }
 
   function initOrbs() {
@@ -2300,12 +2309,21 @@ function initEduCanvas() {
   };
 
   function resize() {
+    const oldW = w, oldH = h;
     const dpr = window.devicePixelRatio > 1 ? 1.5 : 1;
     w = canvas.width = canvas.offsetWidth * dpr;
     h = canvas.height = canvas.offsetHeight * dpr;
     canvas.style.width = canvas.offsetWidth + 'px';
     canvas.style.height = canvas.offsetHeight + 'px';
-    initStars();
+    if (!stars.length) {
+      initStars();
+    } else if (oldW && oldH) {
+      const sx = w / oldW, sy = h / oldH;
+      for (const s of stars) {
+        s.x *= sx;
+        s.y *= sy;
+      }
+    }
   }
 
   function initStars() {
