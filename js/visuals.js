@@ -37,7 +37,7 @@ function trackVisibility(sectionId) {
   const obs = new IntersectionObserver(([entry]) => {
     state._intersecting = entry.isIntersecting;
     state.visible = state._intersecting && !document.hidden;
-  }, { threshold: 0 });
+  }, { threshold: 0, rootMargin: '-1px 0px -1px 0px' });
   obs.observe(el);
   document.addEventListener('visibilitychange', () => {
     state.visible = state._intersecting && !document.hidden;
