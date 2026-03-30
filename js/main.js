@@ -48,6 +48,19 @@ import { initVisuals } from './visuals.js?v=8';
     }
   });
 
+  // Goal 3 controls should release pointer focus after activation so the
+  // buttons and wavetable dropdown do not keep a sticky clicked state.
+  document.addEventListener('click', (e) => {
+    if (e.detail === 0) return;
+    const btn = e.target && e.target.closest
+      ? e.target.closest('#stem-music button')
+      : null;
+    if (!btn) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement === btn) btn.blur();
+    });
+  }, true);
+
   // Enable smooth scrolling after initial load so reload doesn't animate to restored position
   requestAnimationFrame(() => {
     document.documentElement.style.scrollBehavior = 'smooth';
@@ -711,7 +724,10 @@ import { initVisuals } from './visuals.js?v=8';
 
   window.addEventListener('keydown', (e) => {
     const targetTag = e.target?.tagName;
-    const isFormTarget = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(targetTag);
+    const isEditableTarget = ['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag) || e.target?.isContentEditable;
+    const isButtonTarget = targetTag === 'BUTTON';
+    const isFormTarget = isEditableTarget || isButtonTarget;
+    const isSpaceKey = e.key === ' ' || e.key === 'Spacebar';
     if (e.key === 'Tab') {
       e.preventDefault();
       return;
@@ -721,7 +737,26 @@ import { initVisuals } from './visuals.js?v=8';
       heroBtn.click();
       return;
     }
-    if (['ArrowDown', 'PageDown', ' ', 'Spacebar'].includes(e.key)) {
+    if (isSpaceKey) {
+      if (isEditableTarget || isButtonTarget) return;
+      e.preventDefault();
+      const activeSection = allSections[getClosestSectionIdx()];
+      if (activeSection?.id === 'hero' && heroBtn) {
+        heroBtn.click();
+        return;
+      }
+      if (activeSection?.id === 'citizen-science') {
+        const citizenListenBtn = activeSection.querySelector('.cs-listen');
+        if (citizenListenBtn) citizenListenBtn.click();
+        return;
+      }
+      if (activeSection?.id === 'stem-music' && seqPlayBtn) {
+        seqPlayBtn.click();
+        return;
+      }
+      return;
+    }
+    if (['ArrowDown', 'PageDown'].includes(e.key)) {
       startCueFade('down');
     } else if (['ArrowUp', 'PageUp'].includes(e.key)) {
       startCueFade('up');
