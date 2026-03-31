@@ -151,6 +151,7 @@ let CONN_FADE_IN = +(localStorage.getItem('sonara_connFadeIn') || 0.04);
 let CONN_FADE_OUT = +(localStorage.getItem('sonara_connFadeOut') || 0.025);
 let LINE_BASE = +(localStorage.getItem('sonara_lineBase') || 0.08);
 let SUPER_CONN = localStorage.getItem('sonara_superConn') === '1';
+let GATHER_SELECT = localStorage.getItem('sonara_gatherSelect') === '1';
 let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
 let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
@@ -234,6 +235,7 @@ function initHeroCanvas() {
   let gpuGridData = null;      // gridCounts + gridOffsets
   let gpuAuxCounters = null;   // connAtomics + lineIndirect
   let gpuAuxPool = null;       // connFreeList + neighborCount
+  let gpuCandidateData = null;  // enhanced tier: candidate buffer for gather-select
   let gpuFlagsExtractBuf = null, gpuFlagsReadBuf = null, gpuRenderUniformBuf = null;
   let gpuConnPipelines = {};
   let gpuConnBindGroup = null;
@@ -337,6 +339,7 @@ function initHeroCanvas() {
     connFadeOut: Number(CONN_FADE_OUT.toFixed(3)),
     lineBase: Number(LINE_BASE.toFixed(2)),
     superConn: SUPER_CONN,
+    gatherSelect: GATHER_SELECT,
     fadeUpSecs: FADE_UP_SECS,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
@@ -621,6 +624,17 @@ function initHeroCanvas() {
     });
     const scPair = appendDebugPair(debugConnRow, 'Superconn:', scToggle);
     scPair.firstChild.style.color = '#e4bc58';
+
+    const gsToggle = document.createElement('input');
+    gsToggle.type = 'checkbox';
+    gsToggle.checked = GATHER_SELECT;
+    gsToggle.style.cssText = 'margin:0;accent-color:#e4bc58';
+    gsToggle.addEventListener('change', () => {
+      GATHER_SELECT = gsToggle.checked;
+      localStorage.setItem('sonara_gatherSelect', GATHER_SELECT ? '1' : '0');
+    });
+    const gsPair = appendDebugPair(debugConnRow, 'GatherSel:', gsToggle);
+    gsPair.firstChild.style.color = '#e4bc58';
 
     const dSel = document.createElement('select');
     dSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
@@ -2064,8 +2078,8 @@ struct ConnUniforms {
   particleCount: u32,
   maxConnSlots: u32,
   lineBase: f32,
-  superConn: u32,
-  _pad1: u32, _pad2: u32, _pad3: u32,
+  superConn: u32, _pad1: u32,
+  _pad2: u32, _pad3: u32,
 };
 
 @group(0) @binding(0) var<storage, read> pOut: array<POut>;
@@ -2080,6 +2094,11 @@ struct ConnUniforms {
 
 const GRID_OFF: u32 = ${MAX_GRID_CELLS}u; // gridOffsets start at gridData[256]
 const NCNT_OFF: u32 = ${MAX_CONN_SLOTS}u; // neighborCount starts at auxPool[30000]
+const CCNT_OFF: u32 = ${MAX_CONN_SLOTS}u + ${BUFFER_CAP}u; // candCount starts after neighborCount
+const COTHER_OFF: u32 = ${MAX_CONN_SLOTS}u + ${BUFFER_CAP * 2}u; // candOther[MAX_CAND per particle]
+const CD2_OFF: u32 = ${MAX_CONN_SLOTS}u + ${BUFFER_CAP * 2}u + ${BUFFER_CAP * 8}u; // candD2
+const CALPHA_OFF: u32 = ${MAX_CONN_SLOTS}u + ${BUFFER_CAP * 2}u + ${BUFFER_CAP * 16}u; // candAlpha
+const MAX_CAND: u32 = 8u;
 const HASH_SIZE: u32 = 65536u;
 const HASH_MASK: u32 = 65535u;
 const EMPTY: u32 = 0xFFFFFFFFu;
@@ -2118,6 +2137,7 @@ fn gridClear(@builtin(global_invocation_id) gid: vec3u) {
   }
   if (i < cu.particleCount) {
     atomicStore(&auxPool[i + NCNT_OFF], 0u);
+    atomicStore(&auxPool[i + CCNT_OFF], 0u);
   }
 }
 
@@ -2296,6 +2316,175 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
   }
 }
 
+// ── Gather-then-select: two-pass connection search ──────────────────
+// Pass 1: gather ALL candidate pairs per particle (no MAX_CONN check, no hash)
+@compute @workgroup_size(256)
+fn connGather(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flagsI = pOut[i].flags;
+  if ((flagsI & 1u) != 0u) { return; }
+  let xi = pOut[i].x;
+  let yi = pOut[i].y;
+  let pidI = pOut[i].pid;
+  let isBurstI = (flagsI & 2u) != 0u;
+  let cxi = u32(max(0.0, xi) / cu.cellSize);
+  let cyi = u32(max(0.0, yi) / cu.cellSize);
+
+  let aiBrightBoost = 1.0 + cu.lineIntensity * 2.0;
+
+  for (var dy: i32 = -1; dy <= 1; dy++) {
+    for (var dx: i32 = -1; dx <= 1; dx++) {
+      let nx = i32(cxi) + dx;
+      let ny = i32(cyi) + dy;
+      if (nx < 0 || ny < 0 || u32(nx) >= cu.gridCols || u32(ny) >= cu.gridRows) { continue; }
+      let nk = u32(nx) + u32(ny) * cu.gridCols;
+      let cellStart = atomicLoad(&gridData[nk + GRID_OFF]);
+      let cellEnd = cellStart + atomicLoad(&gridData[nk]);
+      for (var jj = cellStart; jj < cellEnd; jj++) {
+        let j = gridIndices[jj];
+        if (j <= i) { continue; }
+        let flagsJ = pOut[j].flags;
+        if ((flagsJ & 1u) != 0u) { continue; }
+        if (isBurstI && (flagsJ & 2u) != 0u) { continue; }
+        let ddx = xi - pOut[j].x;
+        let ddy = yi - pOut[j].y;
+        let d2 = ddx * ddx + ddy * ddy;
+        if (d2 >= cu.connReachSq) { continue; }
+
+        let bucket = min(u32(d2 / cu.connBucketDiv), 4u);
+        let bucketMult = array<f32, 5>(1.0, 0.8, 0.6, 0.4, 0.2);
+        let edgeFade = select(1.0 - (d2 - cu.connFadeStartSq) / (cu.connReachSq - cu.connFadeStartSq), 1.0, d2 < cu.connFadeStartSq);
+        let targetAlpha = cu.lineBase * bucketMult[bucket] * edgeFade * aiBrightBoost * cu.heroBrightness;
+
+        // Write candidate to particle i's list
+        let ci = atomicAdd(&auxPool[i + CCNT_OFF], 1u);
+        if (ci < MAX_CAND) {
+          atomicStore(&auxPool[i * MAX_CAND + ci + COTHER_OFF], j);
+          atomicStore(&auxPool[i * MAX_CAND + ci + CD2_OFF], bitcast<u32>(d2));
+          atomicStore(&auxPool[i * MAX_CAND + ci + CALPHA_OFF], bitcast<u32>(targetAlpha));
+        }
+
+        // Write candidate to particle j's list
+        let cj = atomicAdd(&auxPool[j + CCNT_OFF], 1u);
+        if (cj < MAX_CAND) {
+          atomicStore(&auxPool[j * MAX_CAND + cj + COTHER_OFF], i);
+          atomicStore(&auxPool[j * MAX_CAND + cj + CD2_OFF], bitcast<u32>(d2));
+          atomicStore(&auxPool[j * MAX_CAND + cj + CALPHA_OFF], bitcast<u32>(targetAlpha));
+        }
+      }
+    }
+  }
+}
+
+// Pass 2: per-particle, sort candidates by distance, keep closest MAX_CONN
+@compute @workgroup_size(256)
+fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flagsI = pOut[i].flags;
+  if ((flagsI & 1u) != 0u) { return; }
+  let pidI = pOut[i].pid;
+
+  let rawCount = atomicLoad(&auxPool[i + CCNT_OFF]);
+  let count = min(rawCount, MAX_CAND);
+
+  // Load candidates into local arrays
+  var cOther: array<u32, 8>;
+  var cD2: array<f32, 8>;
+  var cAlpha: array<f32, 8>;
+  for (var k = 0u; k < count; k++) {
+    cOther[k] = atomicLoad(&auxPool[i * MAX_CAND + k + COTHER_OFF]);
+    cD2[k] = bitcast<f32>(atomicLoad(&auxPool[i * MAX_CAND + k + CD2_OFF]));
+    cAlpha[k] = bitcast<f32>(atomicLoad(&auxPool[i * MAX_CAND + k + CALPHA_OFF]));
+  }
+
+  // Insertion sort by d2 ascending
+  for (var a = 1u; a < count; a++) {
+    let tmpO = cOther[a]; let tmpD = cD2[a]; let tmpA = cAlpha[a];
+    var b = a;
+    while (b > 0u && cD2[b - 1u] > tmpD) {
+      cOther[b] = cOther[b - 1u]; cD2[b] = cD2[b - 1u]; cAlpha[b] = cAlpha[b - 1u];
+      b--;
+    }
+    cOther[b] = tmpO; cD2[b] = tmpD; cAlpha[b] = tmpA;
+  }
+
+  // Take closest MAX_CONN candidates
+  let take = min(count, cu.maxConn);
+  for (var k = 0u; k < take; k++) {
+    let j = cOther[k];
+    let targetAlpha = cAlpha[k];
+    let pidJ = pOut[j].pid;
+    let ck = canonKey(pidI, pidJ);
+    let h = hashKey(pidI, pidJ);
+
+    // Hash lookup: update existing or allocate new
+    var found = false;
+    for (var probe = 0u; probe < MAX_PROBE; probe++) {
+      let slot = (h + probe) & HASH_MASK;
+      let stored = atomicLoad(&hashTable[slot * 2u]);
+      if (stored == ck) {
+        let poolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
+        connPool[poolIdx].tgt = targetAlpha;
+        connPool[poolIdx].idxA = select(j, i, pidI < pidJ);
+        connPool[poolIdx].idxB = select(i, j, pidI < pidJ);
+        connPool[poolIdx].state = 3u;
+        found = true;
+        break;
+      }
+      if (stored == EMPTY) { break; }
+    }
+
+    if (!found) {
+      let freeIdx = atomicSub(&auxCounters[1], 1u);
+      if (freeIdx == 0u || freeIdx > cu.maxConnSlots) {
+        atomicAdd(&auxCounters[1], 1u);
+        continue;
+      }
+      let poolSlot = atomicLoad(&auxPool[freeIdx - 1u]);
+
+      connPool[poolSlot].pidA = min(pidI, pidJ);
+      connPool[poolSlot].pidB = max(pidI, pidJ);
+      connPool[poolSlot].alpha = 0.0;
+      connPool[poolSlot].tgt = targetAlpha;
+      connPool[poolSlot].idxA = select(j, i, pidI < pidJ);
+      connPool[poolSlot].idxB = select(i, j, pidI < pidJ);
+      connPool[poolSlot].state = 3u;
+      connPool[poolSlot]._pad = 0u;
+      connPool[poolSlot].frozenAx = 0.0;
+      connPool[poolSlot].frozenAy = 0.0;
+      connPool[poolSlot].frozenBx = 0.0;
+      connPool[poolSlot].frozenBy = 0.0;
+
+      var inserted = false;
+      for (var probe = 0u; probe < MAX_PROBE; probe++) {
+        let slot = (h + probe) & HASH_MASK;
+        var old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+        if (!old.exchanged) {
+          old = atomicCompareExchangeWeak(&hashTable[slot * 2u], TOMBSTONE, ck);
+        }
+        if (old.exchanged) {
+          atomicStore(&hashTable[slot * 2u + 1u], poolSlot);
+          inserted = true;
+          break;
+        }
+        if (old.old_value == ck) {
+          // Race: another thread just inserted this pair — free our duplicate
+          connPool[poolSlot].state = 0u;
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) {
+        connPool[poolSlot].state = 0u;
+      }
+    }
+
+    atomicAdd(&auxPool[i + NCNT_OFF], 1u);
+  }
+}
+
 @compute @workgroup_size(256)
 fn connFade(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
@@ -2376,10 +2565,12 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
     bx = pOut[c.idxB].x; by = pOut[c.idxB].y;
   }
 
-  // Kill cross-screen lines (wrap artifact)
   let ldx = ax - bx;
   let ldy = ay - by;
-  if (ldx * ldx + ldy * ldy > cu.connReachSq * 4.0) {
+  let curD2 = ldx * ldx + ldy * ldy;
+
+  // Kill cross-screen lines (wrap artifact)
+  if (curD2 > cu.connReachSq * 4.0) {
     c.state = 0u;
     connPool[i] = c;
     return;
@@ -2439,8 +2630,8 @@ struct ConnUniforms {
   particleCount: u32,
   maxConnSlots: u32,
   lineBase: f32,
-  superConn: u32,
-  _pad1: u32, _pad2: u32, _pad3: u32,
+  superConn: u32, _pad1: u32,
+  _pad2: u32, _pad3: u32,
 };
 
 @group(0) @binding(0) var<storage, read> pOut: array<POut>;
@@ -2455,7 +2646,13 @@ struct ConnUniforms {
 @group(1) @binding(1) var<storage, read_write> neighborCount: array<atomic<u32>>;
 @group(1) @binding(2) var<storage, read_write> lineIndirect: array<u32>;
 @group(1) @binding(3) var<storage, read_write> connFreeList: array<u32>;
+@group(1) @binding(4) var<storage, read_write> candidateData: array<atomic<u32>>;
 
+const CCNT_OFF: u32 = 0u;
+const COTHER_OFF: u32 = ${BUFFER_CAP}u;
+const CD2_OFF: u32 = ${BUFFER_CAP}u + ${BUFFER_CAP * 8}u;
+const CALPHA_OFF: u32 = ${BUFFER_CAP}u + ${BUFFER_CAP * 16}u;
+const MAX_CAND: u32 = 8u;
 const HASH_SIZE: u32 = 65536u;
 const HASH_MASK: u32 = 65535u;
 const EMPTY: u32 = 0xFFFFFFFFu;
@@ -2494,6 +2691,7 @@ fn gridClear(@builtin(global_invocation_id) gid: vec3u) {
   }
   if (i < cu.particleCount) {
     atomicStore(&neighborCount[i], 0u);
+    atomicStore(&candidateData[i + CCNT_OFF], 0u);
   }
 }
 
@@ -2671,6 +2869,167 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
   }
 }
 
+// ── Gather-then-select: two-pass connection search ──────────────────
+@compute @workgroup_size(256)
+fn connGather(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flagsI = pOut[i].flags;
+  if ((flagsI & 1u) != 0u) { return; }
+  let xi = pOut[i].x;
+  let yi = pOut[i].y;
+  let pidI = pOut[i].pid;
+  let isBurstI = (flagsI & 2u) != 0u;
+  let cxi = u32(max(0.0, xi) / cu.cellSize);
+  let cyi = u32(max(0.0, yi) / cu.cellSize);
+
+  let aiBrightBoost = 1.0 + cu.lineIntensity * 2.0;
+
+  for (var dy: i32 = -1; dy <= 1; dy++) {
+    for (var dx: i32 = -1; dx <= 1; dx++) {
+      let nx = i32(cxi) + dx;
+      let ny = i32(cyi) + dy;
+      if (nx < 0 || ny < 0 || u32(nx) >= cu.gridCols || u32(ny) >= cu.gridRows) { continue; }
+      let nk = u32(nx) + u32(ny) * cu.gridCols;
+      let cellStart = gridOffsets[nk];
+      let cellEnd = cellStart + atomicLoad(&gridCounts[nk]);
+      for (var jj = cellStart; jj < cellEnd; jj++) {
+        let j = gridIndices[jj];
+        if (j <= i) { continue; }
+        let flagsJ = pOut[j].flags;
+        if ((flagsJ & 1u) != 0u) { continue; }
+        if (isBurstI && (flagsJ & 2u) != 0u) { continue; }
+        let ddx = xi - pOut[j].x;
+        let ddy = yi - pOut[j].y;
+        let d2 = ddx * ddx + ddy * ddy;
+        if (d2 >= cu.connReachSq) { continue; }
+
+        let bucket = min(u32(d2 / cu.connBucketDiv), 4u);
+        let bucketMult = array<f32, 5>(1.0, 0.8, 0.6, 0.4, 0.2);
+        let edgeFade = select(1.0 - (d2 - cu.connFadeStartSq) / (cu.connReachSq - cu.connFadeStartSq), 1.0, d2 < cu.connFadeStartSq);
+        let targetAlpha = cu.lineBase * bucketMult[bucket] * edgeFade * aiBrightBoost * cu.heroBrightness;
+
+        let ci = atomicAdd(&candidateData[i + CCNT_OFF], 1u);
+        if (ci < MAX_CAND) {
+          atomicStore(&candidateData[i * MAX_CAND + ci + COTHER_OFF], j);
+          atomicStore(&candidateData[i * MAX_CAND + ci + CD2_OFF], bitcast<u32>(d2));
+          atomicStore(&candidateData[i * MAX_CAND + ci + CALPHA_OFF], bitcast<u32>(targetAlpha));
+        }
+
+        let cj = atomicAdd(&candidateData[j + CCNT_OFF], 1u);
+        if (cj < MAX_CAND) {
+          atomicStore(&candidateData[j * MAX_CAND + cj + COTHER_OFF], i);
+          atomicStore(&candidateData[j * MAX_CAND + cj + CD2_OFF], bitcast<u32>(d2));
+          atomicStore(&candidateData[j * MAX_CAND + cj + CALPHA_OFF], bitcast<u32>(targetAlpha));
+        }
+      }
+    }
+  }
+}
+
+@compute @workgroup_size(256)
+fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flagsI = pOut[i].flags;
+  if ((flagsI & 1u) != 0u) { return; }
+  let pidI = pOut[i].pid;
+
+  let rawCount = atomicLoad(&candidateData[i + CCNT_OFF]);
+  let count = min(rawCount, MAX_CAND);
+
+  var cOther: array<u32, 8>;
+  var cD2: array<f32, 8>;
+  var cAlpha: array<f32, 8>;
+  for (var k = 0u; k < count; k++) {
+    cOther[k] = atomicLoad(&candidateData[i * MAX_CAND + k + COTHER_OFF]);
+    cD2[k] = bitcast<f32>(atomicLoad(&candidateData[i * MAX_CAND + k + CD2_OFF]));
+    cAlpha[k] = bitcast<f32>(atomicLoad(&candidateData[i * MAX_CAND + k + CALPHA_OFF]));
+  }
+
+  for (var a = 1u; a < count; a++) {
+    let tmpO = cOther[a]; let tmpD = cD2[a]; let tmpA = cAlpha[a];
+    var b = a;
+    while (b > 0u && cD2[b - 1u] > tmpD) {
+      cOther[b] = cOther[b - 1u]; cD2[b] = cD2[b - 1u]; cAlpha[b] = cAlpha[b - 1u];
+      b--;
+    }
+    cOther[b] = tmpO; cD2[b] = tmpD; cAlpha[b] = tmpA;
+  }
+
+  let take = min(count, cu.maxConn);
+  for (var k = 0u; k < take; k++) {
+    let j = cOther[k];
+    let targetAlpha = cAlpha[k];
+    let pidJ = pOut[j].pid;
+    let ck = canonKey(pidI, pidJ);
+    let h = hashKey(pidI, pidJ);
+
+    var found = false;
+    for (var probe = 0u; probe < MAX_PROBE; probe++) {
+      let slot = (h + probe) & HASH_MASK;
+      let stored = atomicLoad(&hashTable[slot * 2u]);
+      if (stored == ck) {
+        let poolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
+        connPool[poolIdx].tgt = targetAlpha;
+        connPool[poolIdx].idxA = select(j, i, pidI < pidJ);
+        connPool[poolIdx].idxB = select(i, j, pidI < pidJ);
+        connPool[poolIdx].state = 3u;
+        found = true;
+        break;
+      }
+      if (stored == EMPTY) { break; }
+    }
+
+    if (!found) {
+      let freeIdx = atomicSub(&connAtomics[1], 1u);
+      if (freeIdx == 0u || freeIdx > cu.maxConnSlots) {
+        atomicAdd(&connAtomics[1], 1u);
+        continue;
+      }
+      let poolSlot = connFreeList[freeIdx - 1u];
+
+      connPool[poolSlot].pidA = min(pidI, pidJ);
+      connPool[poolSlot].pidB = max(pidI, pidJ);
+      connPool[poolSlot].alpha = 0.0;
+      connPool[poolSlot].tgt = targetAlpha;
+      connPool[poolSlot].idxA = select(j, i, pidI < pidJ);
+      connPool[poolSlot].idxB = select(i, j, pidI < pidJ);
+      connPool[poolSlot].state = 3u;
+      connPool[poolSlot]._pad = 0u;
+      connPool[poolSlot].frozenAx = 0.0;
+      connPool[poolSlot].frozenAy = 0.0;
+      connPool[poolSlot].frozenBx = 0.0;
+      connPool[poolSlot].frozenBy = 0.0;
+
+      var inserted = false;
+      for (var probe = 0u; probe < MAX_PROBE; probe++) {
+        let slot = (h + probe) & HASH_MASK;
+        var old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+        if (!old.exchanged) {
+          old = atomicCompareExchangeWeak(&hashTable[slot * 2u], TOMBSTONE, ck);
+        }
+        if (old.exchanged) {
+          atomicStore(&hashTable[slot * 2u + 1u], poolSlot);
+          inserted = true;
+          break;
+        }
+        if (old.old_value == ck) {
+          // Race: another thread just inserted this pair — free our duplicate
+          connPool[poolSlot].state = 0u;
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) {
+        connPool[poolSlot].state = 0u;
+      }
+    }
+
+    atomicAdd(&neighborCount[i], 1u);
+  }
+}
+
 @compute @workgroup_size(256)
 fn connFade(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
@@ -2751,10 +3110,12 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
     bx = pOut[c.idxB].x; by = pOut[c.idxB].y;
   }
 
-  // Kill cross-screen lines (wrap artifact)
   let ldx = ax - bx;
   let ldy = ay - by;
-  if (ldx * ldx + ldy * ldy > cu.connReachSq * 4.0) {
+  let curD2 = ldx * ldx + ldy * ldy;
+
+  // Kill cross-screen lines (wrap artifact)
+  if (curD2 > cu.connReachSq * 4.0) {
     c.state = 0u;
     connPool[i] = c;
     return;
@@ -3085,6 +3446,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
             { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // neighborCount
             { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // lineIndirect
             { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // connFreeList
+            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // candidateData
           ],
         });
         device._connBindGroupLayout0 = connBindGroupLayout0;
@@ -3103,6 +3465,8 @@ fn fs(in: VSOut) -> @location(0) vec4f {
         gridScatter: makeConnPipeline('gridScatter'),
         buildFreeList: makeConnPipeline('buildFreeList'),
         connSearch: makeConnPipeline('connSearch'),
+        connGather: makeConnPipeline('connGather'),
+        connSelect: makeConnPipeline('connSelect'),
         connFade: makeConnPipeline('connFade'),
         writeIndirect: makeConnPipeline('writeIndirect'),
       };
@@ -3275,7 +3639,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     // Destroy old connection buffers
     const connBufs = [gpuGridCounts, gpuGridOffsets, gpuGridIndices, gpuRenderLines,
       gpuConnAtomics, gpuConnUniformBuf, gpuNeighborCount, gpuLineIndirectBuf,
-      gpuConnFreeList, gpuGridData, gpuAuxCounters, gpuAuxPool,
+      gpuConnFreeList, gpuGridData, gpuAuxCounters, gpuAuxPool, gpuCandidateData,
       gpuFlagsExtractBuf, gpuFlagsReadBuf, gpuRenderUniformBuf];
     for (const b of connBufs) { if (b) b.destroy(); }
 
@@ -3316,15 +3680,16 @@ fn fs(in: VSOut) -> @location(0) vec4f {
         size: 6 * 4, // 6 u32s (2 atomics + 4 indirect draw params)
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.INDIRECT,
       });
-      // auxPool = connFreeList[0..MAX_CONN_SLOTS-1] + neighborCount[MAX_CONN_SLOTS..]
+      // auxPool = connFreeList[0..MAX_CONN_SLOTS-1] + neighborCount[MAX_CONN_SLOTS..] + candidate data
+      // Layout: freeList[30000] + neighborCount[P] + candCount[P] + candOther[8P] + candD2[8P] + candAlpha[8P]
       gpuAuxPool = device.createBuffer({
-        size: (MAX_CONN_SLOTS + count) * 4,
+        size: (MAX_CONN_SLOTS + count * 26) * 4,
         usage: GPUBufferUsage.STORAGE,
       });
       // Null out unpacked-only refs
       gpuGridCounts = null; gpuGridOffsets = null;
       gpuConnAtomics = null; gpuNeighborCount = null;
-      gpuLineIndirectBuf = null; gpuConnFreeList = null;
+      gpuLineIndirectBuf = null; gpuConnFreeList = null; gpuCandidateData = null;
     } else {
       // Enhanced tier: individual buffers
       gpuGridCounts = device.createBuffer({
@@ -3349,6 +3714,11 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       });
       gpuConnFreeList = device.createBuffer({
         size: MAX_CONN_SLOTS * 4,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      // candidateData: candCount[P] + candOther[8P] + candD2[8P] + candAlpha[8P] = 25P u32s
+      gpuCandidateData = device.createBuffer({
+        size: count * 25 * 4,
         usage: GPUBufferUsage.STORAGE,
       });
       // Null out packed-only refs
@@ -3418,6 +3788,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: gpuNeighborCount } },
           { binding: 2, resource: { buffer: gpuLineIndirectBuf } },
           { binding: 3, resource: { buffer: gpuConnFreeList } },
+          { binding: 4, resource: { buffer: gpuCandidateData } },
         ],
       });
     }
@@ -4108,11 +4479,27 @@ fn fs(in: VSOut) -> @location(0) vec4f {
           p5.dispatchWorkgroups(wgConns);
           p5.end();
 
-          const p6 = commandEncoder.beginComputePass();
-          p6.setPipeline(gpuConnPipelines.connSearch);
-          setConnBindGroups(p6);
-          p6.dispatchWorkgroups(wgParticles);
-          p6.end();
+          if (GATHER_SELECT) {
+            // Two-pass: gather all candidates, then select closest
+            const gatherPass = commandEncoder.beginComputePass();
+            gatherPass.setPipeline(gpuConnPipelines.connGather);
+            setConnBindGroups(gatherPass);
+            gatherPass.dispatchWorkgroups(wgParticles);
+            gatherPass.end();
+
+            const selectPass = commandEncoder.beginComputePass();
+            selectPass.setPipeline(gpuConnPipelines.connSelect);
+            setConnBindGroups(selectPass);
+            selectPass.dispatchWorkgroups(wgParticles);
+            selectPass.end();
+          } else {
+            // Single-pass: old connSearch
+            const p6 = commandEncoder.beginComputePass();
+            p6.setPipeline(gpuConnPipelines.connSearch);
+            setConnBindGroups(p6);
+            p6.dispatchWorkgroups(wgParticles);
+            p6.end();
+          }
         }
 
         const fadePass = commandEncoder.beginComputePass();
