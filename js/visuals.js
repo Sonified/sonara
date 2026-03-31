@@ -213,8 +213,9 @@ function initHeroCanvas() {
   let gpuOutputBuf = null, gpuOutputReadBuf = null;
   let gpuBindGroup = null;
   let gpuParticleCount = 0;
-  const GPU_PARTICLE_STRIDE = 64; // 16 floats per particle (matches struct)
-  const GPU_OUTPUT_STRIDE = 32;   // 8 floats per output entry
+  let GPU_PARTICLE_STRIDE = 64; // 16 floats per particle (matches struct) — overridden to 40 if f16
+  let GPU_OUTPUT_STRIDE = 32;   // 8 floats per output entry — overridden to 24 if f16
+  let gpuHasF16 = false;        // set true in initWebGPU() if shader-f16 is available
 
   // WebGPU slot management (initialized after BUFFER_CAP is defined)
   let gpuWatermark = 0;
@@ -672,6 +673,29 @@ function initHeroCanvas() {
   const ftEl = document.createElement('span');
   ftEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:4ch;white-space:nowrap;color:#f0c040';
   debugPerfRow.appendChild(ftEl);
+  const ftAvgEl = document.createElement('span');
+  ftAvgEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:4ch;white-space:nowrap;color:#888';
+  debugPerfRow.appendChild(ftAvgEl);
+  const FT_AVG_SAMPLES = 80; // 20s at 4 updates/sec
+  const ftAvgBuf = new Float32Array(FT_AVG_SAMPLES);
+  let ftAvgIdx = 0;
+  let ftAvgCount = 0;
+
+  // f16 toggle checkbox (right of %)
+  const f16Label = document.createElement('label');
+  f16Label.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;color:#60a5fa;white-space:nowrap';
+  const f16Check = document.createElement('input');
+  f16Check.type = 'checkbox';
+  f16Check.checked = localStorage.getItem('sonara_f16') !== '0'; // default on
+  f16Check.style.cssText = 'margin:0;cursor:pointer';
+  f16Label.appendChild(f16Check);
+  f16Label.appendChild(document.createTextNode('f16'));
+  debugPerfRow.appendChild(f16Label);
+  f16Check.addEventListener('change', () => {
+    localStorage.setItem('sonara_f16', f16Check.checked ? '1' : '0');
+    location.reload();
+  });
+
   let ftSmooth = 0;
 
   // Max particles dropdown (between FPS and particle counts)
@@ -1614,6 +1638,217 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+  // ── f16 variant of the compute shader (40-byte Particle, 24-byte ParticleOut) ─
+  const WGSL_PHYSICS_F16 = `
+enable f16;
+
+struct Particle {
+  x: f32, y: f32,
+  pid_bits: u32,
+  vx: f16, vy: f16,
+  phase: f16, alpha: f16,
+  r: f16, age: f16,
+  fadeIn: f16, life: f16,
+  decay: f16, baseAlpha: f16,
+  reactivity: f16, rippleSpeed: f16,
+  canWhiten: f16, _pad: f16,
+};
+
+struct ParticleOut {
+  x: f32, y: f32,
+  vx: f16, vy: f16,
+  size: f16, alpha_out: f16,
+  pid: u32, flags: u32,
+};
+
+struct Uniforms {
+  time: f32,
+  w: f32, h: f32,
+  btnCX: f32, btnCY: f32,
+  friction: f32,
+  swirlForce: f32, pullForce: f32,
+  forceRadius: f32,
+  heroAudioPlaying: f32,
+  mouseX: f32, mouseY: f32,
+  mouseSwirlMix: f32,
+  mouseInteractionMult: f32,
+  rippleHead: u32,
+  rippleInnerRadius: f32,
+  heroBrightness: f32,
+  seed: f32,
+  particleCount: u32,
+  _pad1: u32, _pad2: u32, _pad3: u32, _pad4: u32, _pad5: u32,
+};
+
+@group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
+@group(0) @binding(1) var<storage, read_write> output: array<ParticleOut>;
+@group(0) @binding(2) var<uniform> u: Uniforms;
+@group(0) @binding(3) var<storage, read> brightnessRipple: array<f32, 512>;
+@group(0) @binding(4) var<storage, read> spinRipple: array<f32, 512>;
+
+fn hash2d(p: vec2f) -> f32 {
+  return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= u.particleCount) { return; }
+
+  var p = particles[i];
+
+  // Promote f16 fields to f32 for math
+  var vx = f32(p.vx);
+  var vy = f32(p.vy);
+  var phase = f32(p.phase);
+  var alpha = f32(p.alpha);
+  var r = f32(p.r);
+  var age = f32(p.age);
+  var fadeInVal = f32(p.fadeIn);
+  var life = f32(p.life);
+  var decay = f32(p.decay);
+  var baseAlpha = f32(p.baseAlpha);
+  var reactivity = f32(p.reactivity);
+  var rippleSpeed = f32(p.rippleSpeed);
+  var canWhiten = f32(p.canWhiten);
+  var pid = f32(p.pid_bits);
+
+  // Dead particle — pass through
+  if (life < -900.0) {
+    output[i] = ParticleOut(p.x, p.y, f16(0.0), f16(0.0), f16(0.0), f16(0.0), p.pid_bits, 1u);
+    return;
+  }
+
+  // Age
+  age += 1.0;
+
+  // Burst lifecycle
+  if (life > 0.0) {
+    life -= decay;
+    if (life <= 0.0) {
+      life = -999.0;
+      p.age = f16(age); p.life = f16(life);
+      p.vx = f16(vx); p.vy = f16(vy);
+      particles[i] = p;
+      output[i] = ParticleOut(p.x, p.y, f16(0.0), f16(0.0), f16(0.0), f16(0.0), p.pid_bits, 1u);
+      return;
+    }
+    alpha = baseAlpha * life;
+  }
+
+  // Distance from swirl center
+  let dxB = p.x - u.btnCX;
+  let dyB = p.y - u.btnCY;
+  let distFromBtn = sqrt(dxB * dxB + dyB * dyB);
+
+  // Ripple-delayed audio lookup
+  let delayedDist = max(0.0, distFromBtn - u.rippleInnerRadius);
+  var delayFrames: i32 = 0;
+  if (rippleSpeed > 0.0) {
+    delayFrames = min(i32(delayedDist / rippleSpeed), 511);
+  }
+  let bIdx = (i32(u.rippleHead) - delayFrames + 512) % 512;
+  let sIdx = bIdx;
+  let localBrightness = brightnessRipple[bIdx];
+  let localSpin = spinRipple[sIdx];
+
+  // Radial attenuation: pow(x, 1.5) = x * sqrt(x)
+  let attenuationRadius = max(u.w, u.h) * u.forceRadius;
+  let radialBase = max(0.0, 1.0 - distFromBtn / attenuationRadius);
+  let radialAttenuation = radialBase * sqrt(radialBase);
+
+  // Visual calculations
+  let wave = sin(u.time * 2.0 + phase) * 0.5 + 0.5;
+  let fadeIn = select(1.0, min(1.0, age / fadeInVal), fadeInVal > 0.0);
+  let react = reactivity;
+  let br = localBrightness * radialAttenuation * react;
+  let audioBoost = select(0.0, br * (0.8 + sin(u.time * 3.7 + phase * 2.0) * 0.3), br > 0.001);
+  let rng1 = hash2d(vec2f(p.x + u.seed, p.y + u.time));
+  let tremble = select(0.0, (rng1 - 0.5) * 0.12 * br, br > 0.001);
+  let currentAlpha = min(1.0, (alpha * (0.5 + wave * 0.5) + audioBoost * 1.5 + tremble) * fadeIn * u.heroBrightness);
+  let currentR = r * (0.8 + wave * 0.4) * (1.0 + audioBoost * 0.5);
+  let currentSize = max(3.0, currentR * 6.0);
+
+  // Position update
+  p.x += vx;
+  p.y += vy;
+
+  // Audio swirl forces
+  let dist = max(distFromBtn, 1.0);
+  let proximity = max(0.0, 1.0 - dist / attenuationRadius);
+
+  if (localSpin > 0.01 && proximity > 0.0) {
+    let nx = dxB / dist;
+    let ny = dyB / dist;
+    let swirlStr = localSpin * proximity * u.swirlForce;
+    vx += -ny * swirlStr;
+    vy += nx * swirlStr;
+    let pull = localSpin * proximity * u.pullForce;
+    vx -= nx * pull;
+    vy -= ny * pull;
+    let jit = react * 0.25 * localSpin;
+    let rng2 = hash2d(vec2f(p.y + u.seed * 2.0, p.x + u.time));
+    let rng3 = hash2d(vec2f(p.x * 1.3 + u.seed, p.y * 0.7 + u.time));
+    vx += (rng2 - 0.5) * jit;
+    vy += (rng3 - 0.5) * jit;
+  }
+
+  // Spread when quiet and not playing
+  if (localSpin < 0.5 && localSpin > 0.001 && u.heroAudioPlaying < 0.5 && dist > 1.0) {
+    let nx = dxB / dist;
+    let ny = dyB / dist;
+    let spread = (0.5 - localSpin) * 0.008;
+    vx += nx * spread;
+    vy += ny * spread;
+  }
+
+  // Mouse attraction/swirl
+  if (u.mouseSwirlMix > 0.001) {
+    let dmx = u.mouseX - p.x;
+    let dmy = u.mouseY - p.y;
+    let d2 = dmx * dmx + dmy * dmy;
+    if (d2 < 336400.0) {
+      let mdist = sqrt(d2);
+      let mprox = 1.0 - mdist / 580.0;
+      let force = mprox * 0.00006 * u.mouseSwirlMix * u.mouseInteractionMult;
+      let swirl = mprox * 0.00008 * u.mouseSwirlMix * u.mouseInteractionMult;
+      vx += dmx * force + dmy * swirl;
+      vy += dmy * force + (-dmx) * swirl;
+    }
+  }
+
+  // Friction
+  vx *= u.friction;
+  vy *= u.friction;
+
+  // Edge wrapping
+  var wrapped = false;
+  if (p.x < 0.0) { p.x = u.w; wrapped = true; }
+  else if (p.x > u.w) { p.x = 0.0; wrapped = true; }
+  if (p.y < 0.0) { p.y = 0.0; p.x = u.w - p.x; vy = abs(vy); wrapped = true; }
+  else if (p.y > u.h) { p.y = u.h; p.x = u.w - p.x; vy = -abs(vy); wrapped = true; }
+
+  // Write back updated state
+  p.vx = f16(vx); p.vy = f16(vy);
+  p.phase = f16(phase); p.alpha = f16(alpha);
+  p.r = f16(r); p.age = f16(age);
+  p.fadeIn = f16(fadeInVal); p.life = f16(life);
+  p.decay = f16(decay); p.baseAlpha = f16(baseAlpha);
+  p.reactivity = f16(reactivity); p.rippleSpeed = f16(rippleSpeed);
+  p.canWhiten = f16(canWhiten);
+  particles[i] = p;
+
+  // Build flags: bit 0 = dead, bit 1 = burst, bit 2 = canWhiten, bit 3 = wrapped
+  var flags = 0u;
+  if (life < -900.0) { flags |= 1u; }
+  if (life > 0.0) { flags |= 2u; }
+  if (canWhiten > 0.5) { flags |= 4u; }
+  if (wrapped) { flags |= 8u; }
+
+  output[i] = ParticleOut(p.x, p.y, f16(vx), f16(vy), f16(currentSize), f16(currentAlpha), p.pid_bits, flags);
+}
+`;
+
   // Uniform buffer layout: 22 fields, padded to 96 bytes (24 x f32)
   const GPU_UNIFORM_SIZE = 96;
   const gpuUniformData = new ArrayBuffer(GPU_UNIFORM_SIZE);
@@ -1632,7 +1867,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     try {
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
       if (!adapter) return;
+      const hasF16 = adapter.features.has('shader-f16') && localStorage.getItem('sonara_f16') !== '0';
       const device = await adapter.requestDevice({
+        requiredFeatures: hasF16 ? ['shader-f16'] : [],
         requiredLimits: {
           maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
           maxBufferSize: adapter.limits.maxBufferSize,
@@ -1640,7 +1877,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       });
       if (!device) return;
 
-      const shaderModule = device.createShaderModule({ code: WGSL_PHYSICS });
+      if (hasF16) {
+        gpuHasF16 = true;
+        GPU_PARTICLE_STRIDE = 40;
+        GPU_OUTPUT_STRIDE = 24;
+        console.log('shader-f16 supported: particle 40B, output 24B');
+      }
+
+      const shaderModule = device.createShaderModule({ code: hasF16 ? WGSL_PHYSICS_F16 : WGSL_PHYSICS });
       const compilationInfo = await shaderModule.getCompilationInfo();
       for (const msg of compilationInfo.messages) {
         if (msg.type === 'error') {
@@ -1728,9 +1972,44 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       ],
     });
 
-    gpuParticleCPU = new Float32Array(count * 16);
-    gpuOutputCPU = new Float32Array(count * 8);
+    if (gpuHasF16) {
+      // f16 path: CPU-side buffers are raw byte arrays (mixed f32/f16 via DataView)
+      gpuParticleCPU = new Uint8Array(count * GPU_PARTICLE_STRIDE);
+      gpuOutputCPU = null; // will be a Uint8Array from readback
+    } else {
+      gpuParticleCPU = new Float32Array(count * 16);
+      gpuOutputCPU = new Float32Array(count * 8);
+    }
     gpuParticleCount = count;
+  }
+
+  // f16 write helper: packs one particle into a 40-byte ArrayBuffer via DataView
+  // Layout: [x:f32 @0, y:f32 @4, pid:u32 @8, vx:f16 @12, vy:f16 @14,
+  //          phase:f16 @16, alpha:f16 @18, r:f16 @20, age:f16 @22,
+  //          fadeIn:f16 @24, life:f16 @26, decay:f16 @28, baseAlpha:f16 @30,
+  //          reactivity:f16 @32, rippleSpeed:f16 @34, canWhiten:f16 @36, _pad:f16 @38]
+  const gpuF16Tmp = new ArrayBuffer(40);
+  const gpuF16View = new DataView(gpuF16Tmp);
+  function writeParticleF16(x, y, pid, vx, vy, phase, alpha, r, age, fadeIn, life, decay, baseAlpha, reactivity, rippleSpeed, canWhiten) {
+    const v = gpuF16View;
+    v.setFloat32(0, x, true);
+    v.setFloat32(4, y, true);
+    v.setUint32(8, pid, true);
+    v.setFloat16(12, vx, true);
+    v.setFloat16(14, vy, true);
+    v.setFloat16(16, phase, true);
+    v.setFloat16(18, alpha, true);
+    v.setFloat16(20, r, true);
+    v.setFloat16(22, age, true);
+    v.setFloat16(24, fadeIn, true);
+    v.setFloat16(26, life, true);
+    v.setFloat16(28, decay, true);
+    v.setFloat16(30, baseAlpha, true);
+    v.setFloat16(32, reactivity, true);
+    v.setFloat16(34, rippleSpeed, true);
+    v.setFloat16(36, canWhiten, true);
+    v.setFloat16(38, 0, true); // _pad
+    return gpuF16Tmp;
   }
 
   // Kick off WebGPU init immediately (non-blocking)
@@ -1798,43 +2077,80 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       gpuWatermark = initialParticleCount;
       gpuFreeSlots.length = 0;
 
-      for (let i = 0; i < initialParticleCount; i++) {
-        const off = i * 16;
-        const pid = nextPid = (nextPid + 1) % PID_MAX;
-        const cw = Math.random() < getWhiteParticleChance();
-        const x = Math.random() * w, y = Math.random() * h;
-        const vx = (Math.random() - 0.5) * 0.4, vy = (Math.random() - 0.5) * 0.4;
-        const alpha = Math.random() * 0.4 + 0.1;
-
-        // GPU buffer data
-        initData[off + 0]  = x;
-        initData[off + 1]  = y;
-        initData[off + 2]  = vx;
-        initData[off + 3]  = vy;
-        initData[off + 4]  = Math.random() * Math.PI * 2;  // phase
-        initData[off + 5]  = alpha;
-        initData[off + 6]  = Math.random() * 2 + 0.5;      // r
-        initData[off + 7]  = 0;  // age
-        initData[off + 8]  = FADE_FRAMES;  // fadeIn
-        initData[off + 9]  = 0;  // life (0 = auto-particle)
-        initData[off + 10] = 0;  // decay
-        initData[off + 11] = 0;  // baseAlpha
-        initData[off + 12] = 0.3 + Math.random() * 0.7; // reactivity
-        initData[off + 13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
-        initData[off + 14] = cw ? 1 : 0;
-        initData[off + 15] = pid;
-
-        // CPU slot mirror
-        const s = gpuSlots[i];
-        s.dead = false; s.pid = pid;
-        s.x = x; s.y = y; s.vx = vx; s.vy = vy;
-        s.canWhiten = cw; s.life = undefined; s.alpha = alpha;
-      }
-      // Mark unused GPU slots as dead
-      for (let i = initialParticleCount; i < BUFFER_CAP; i++) {
-        initData[i * 16 + 9] = -999;
-        gpuSlots[i].dead = true;
-        gpuSlots[i].pid = -1;
+      if (gpuHasF16) {
+        // f16 path: write mixed f32/f16 via DataView into Uint8Array
+        const dv = new DataView(initData.buffer);
+        for (let i = 0; i < initialParticleCount; i++) {
+          const off = i * 40; // GPU_PARTICLE_STRIDE = 40
+          const pid = nextPid = (nextPid + 1) % PID_MAX;
+          const cw = Math.random() < getWhiteParticleChance();
+          const x = Math.random() * w, y = Math.random() * h;
+          const vx = (Math.random() - 0.5) * 0.4, vy = (Math.random() - 0.5) * 0.4;
+          const alpha = Math.random() * 0.4 + 0.1;
+          dv.setFloat32(off + 0, x, true);
+          dv.setFloat32(off + 4, y, true);
+          dv.setUint32(off + 8, pid, true);
+          dv.setFloat16(off + 12, vx, true);
+          dv.setFloat16(off + 14, vy, true);
+          dv.setFloat16(off + 16, Math.random() * Math.PI * 2, true); // phase
+          dv.setFloat16(off + 18, alpha, true);
+          dv.setFloat16(off + 20, Math.random() * 2 + 0.5, true); // r
+          dv.setFloat16(off + 22, 0, true); // age
+          dv.setFloat16(off + 24, FADE_FRAMES, true); // fadeIn
+          dv.setFloat16(off + 26, 0, true); // life
+          dv.setFloat16(off + 28, 0, true); // decay
+          dv.setFloat16(off + 30, 0, true); // baseAlpha
+          dv.setFloat16(off + 32, 0.3 + Math.random() * 0.7, true); // reactivity
+          dv.setFloat16(off + 34, RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR, true);
+          dv.setFloat16(off + 36, cw ? 1 : 0, true); // canWhiten
+          dv.setFloat16(off + 38, 0, true); // _pad
+          const s = gpuSlots[i];
+          s.dead = false; s.pid = pid;
+          s.x = x; s.y = y; s.vx = vx; s.vy = vy;
+          s.canWhiten = cw; s.life = undefined; s.alpha = alpha;
+        }
+        // Mark unused GPU slots as dead (life @ offset 26 = -999)
+        for (let i = initialParticleCount; i < BUFFER_CAP; i++) {
+          const off = i * 40;
+          dv.setFloat16(off + 26, -999, true); // life = -999
+          gpuSlots[i].dead = true;
+          gpuSlots[i].pid = -1;
+        }
+      } else {
+        // f32 path (unchanged)
+        for (let i = 0; i < initialParticleCount; i++) {
+          const off = i * 16;
+          const pid = nextPid = (nextPid + 1) % PID_MAX;
+          const cw = Math.random() < getWhiteParticleChance();
+          const x = Math.random() * w, y = Math.random() * h;
+          const vx = (Math.random() - 0.5) * 0.4, vy = (Math.random() - 0.5) * 0.4;
+          const alpha = Math.random() * 0.4 + 0.1;
+          initData[off + 0]  = x;
+          initData[off + 1]  = y;
+          initData[off + 2]  = vx;
+          initData[off + 3]  = vy;
+          initData[off + 4]  = Math.random() * Math.PI * 2;
+          initData[off + 5]  = alpha;
+          initData[off + 6]  = Math.random() * 2 + 0.5;
+          initData[off + 7]  = 0;
+          initData[off + 8]  = FADE_FRAMES;
+          initData[off + 9]  = 0;
+          initData[off + 10] = 0;
+          initData[off + 11] = 0;
+          initData[off + 12] = 0.3 + Math.random() * 0.7;
+          initData[off + 13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
+          initData[off + 14] = cw ? 1 : 0;
+          initData[off + 15] = pid;
+          const s = gpuSlots[i];
+          s.dead = false; s.pid = pid;
+          s.x = x; s.y = y; s.vx = vx; s.vy = vy;
+          s.canWhiten = cw; s.life = undefined; s.alpha = alpha;
+        }
+        for (let i = initialParticleCount; i < BUFFER_CAP; i++) {
+          initData[i * 16 + 9] = -999;
+          gpuSlots[i].dead = true;
+          gpuSlots[i].pid = -1;
+        }
       }
       gpuDevice.queue.writeBuffer(gpuParticleBuf, 0, initData);
       gpuParticleCount = BUFFER_CAP;
@@ -2016,7 +2332,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     // WEBGPU COMPUTE PATH
     // ==================================================================
     if (WEBGPU_ACTIVE) {
-      const gpuTmpSlot = new Float32Array(16); // reused scratch buffer for writes
+      const gpuTmpSlot = gpuHasF16 ? null : new Float32Array(16); // reused scratch for f32 writes
 
       // --- Spawning ---
       let gpuAlive = 0;
@@ -2036,18 +2352,29 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           s.vx = (Math.random() - 0.5) * 0.4; s.vy = (Math.random() - 0.5) * 0.4;
           s.canWhiten = Math.random() < getWhiteParticleChance();
           s.life = undefined; // auto-particle
-          const tmp = gpuTmpSlot;
-          tmp[0] = s.x; tmp[1] = s.y; tmp[2] = s.vx; tmp[3] = s.vy;
-          tmp[4] = Math.random() * Math.PI * 2; // phase
-          tmp[5] = Math.random() * 0.4 + 0.1;   // alpha
-          tmp[6] = Math.random() * 2 + 0.5;      // r
-          tmp[7] = 0; // age
-          tmp[8] = FADE_FRAMES; tmp[9] = 0; tmp[10] = 0; tmp[11] = 0; // fadeIn, life, decay, baseAlpha
-          tmp[12] = 0.3 + Math.random() * 0.7; // reactivity
-          tmp[13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
-          tmp[14] = s.canWhiten ? 1 : 0;
-          tmp[15] = pid;
-          gpuDevice.queue.writeBuffer(gpuParticleBuf, slot * GPU_PARTICLE_STRIDE, tmp);
+          if (gpuHasF16) {
+            const buf = writeParticleF16(
+              s.x, s.y, pid, s.vx, s.vy,
+              Math.random() * Math.PI * 2, Math.random() * 0.4 + 0.1,
+              Math.random() * 2 + 0.5, 0, FADE_FRAMES, 0, 0, 0,
+              0.3 + Math.random() * 0.7, RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
+              s.canWhiten ? 1 : 0
+            );
+            gpuDevice.queue.writeBuffer(gpuParticleBuf, slot * GPU_PARTICLE_STRIDE, buf);
+          } else {
+            const tmp = gpuTmpSlot;
+            tmp[0] = s.x; tmp[1] = s.y; tmp[2] = s.vx; tmp[3] = s.vy;
+            tmp[4] = Math.random() * Math.PI * 2;
+            tmp[5] = Math.random() * 0.4 + 0.1;
+            tmp[6] = Math.random() * 2 + 0.5;
+            tmp[7] = 0;
+            tmp[8] = FADE_FRAMES; tmp[9] = 0; tmp[10] = 0; tmp[11] = 0;
+            tmp[12] = 0.3 + Math.random() * 0.7;
+            tmp[13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
+            tmp[14] = s.canWhiten ? 1 : 0;
+            tmp[15] = pid;
+            gpuDevice.queue.writeBuffer(gpuParticleBuf, slot * GPU_PARTICLE_STRIDE, tmp);
+          }
         }
       }
 
@@ -2069,9 +2396,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             const s = gpuSlots[idx];
             s.life = 1;
             const decay = 0.008 + Math.random() * 0.008;
-            // Update GPU: lifecycle = [fadeIn, life=1, decay, baseAlpha=alpha]
-            const tmp = new Float32Array([0, 1, decay, s.alpha || 0.2]);
-            gpuDevice.queue.writeBuffer(gpuParticleBuf, idx * GPU_PARTICLE_STRIDE + 32, tmp);
+            if (gpuHasF16) {
+              // f16: lifecycle fields at offsets 24-30 (fadeIn, life, decay, baseAlpha)
+              const buf = new ArrayBuffer(8);
+              const dv = new DataView(buf);
+              dv.setFloat16(0, 0, true);           // fadeIn = 0
+              dv.setFloat16(2, 1, true);            // life = 1
+              dv.setFloat16(4, decay, true);        // decay
+              dv.setFloat16(6, s.alpha || 0.2, true); // baseAlpha
+              gpuDevice.queue.writeBuffer(gpuParticleBuf, idx * GPU_PARTICLE_STRIDE + 24, buf);
+            } else {
+              const tmp = new Float32Array([0, 1, decay, s.alpha || 0.2]);
+              gpuDevice.queue.writeBuffer(gpuParticleBuf, idx * GPU_PARTICLE_STRIDE + 32, tmp);
+            }
           }
         }
       }
@@ -2104,16 +2441,33 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       // --- Process PREVIOUS frame's readback (skip until first real readback) ---
       if (gpuOutputCPU && gpuFirstReadback) {
         const out = gpuOutputCPU;
-        const outU32 = new Uint32Array(out.buffer, out.byteOffset, out.length);
+        const outDV = gpuHasF16 ? new DataView(out.buffer, out.byteOffset) : null;
+        const outU32 = gpuHasF16 ? null : new Uint32Array(out.buffer, out.byteOffset, out.length);
         let pIdx = 0;
 
         for (let i = 0; i < gpuWatermark; i++) {
-          const off = i * 8;
-          if (off + 7 >= out.length) break;
-          const px = out[off], py = out[off + 1];
-          const pvx = out[off + 2], pvy = out[off + 3];
-          const size = out[off + 4], alphaOut = out[off + 5];
-          const flags = outU32[off + 7];
+          let px, py, pvx, pvy, size, alphaOut, flags;
+          if (gpuHasF16) {
+            // f16 output: 24 bytes per particle [x:f32, y:f32, vx:f16, vy:f16, size:f16, alpha:f16, pid:u32, flags:u32]
+            const byteOff = i * 24;
+            if (byteOff + 23 >= out.byteLength) break;
+            const dv = outDV;
+            px = dv.getFloat32(byteOff, true);
+            py = dv.getFloat32(byteOff + 4, true);
+            pvx = dv.getFloat16(byteOff + 8, true);
+            pvy = dv.getFloat16(byteOff + 10, true);
+            size = dv.getFloat16(byteOff + 12, true);
+            alphaOut = dv.getFloat16(byteOff + 14, true);
+            flags = dv.getUint32(byteOff + 20, true);
+          } else {
+            // f32 output: 32 bytes per particle (8 floats)
+            const off = i * 8;
+            if (off + 7 >= out.length) break;
+            px = out[off]; py = out[off + 1];
+            pvx = out[off + 2]; pvy = out[off + 3];
+            size = out[off + 4]; alphaOut = out[off + 5];
+            flags = outU32[off + 7];
+          }
           const dead = (flags & 1) !== 0;
           const wrapped = (flags & 8) !== 0;
 
@@ -2192,11 +2546,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       if (!gpuReadbackPending) {
         gpuReadbackPending = true;
         gpuOutputReadBuf.mapAsync(GPUMapMode.READ).then(() => {
-          const mapped = new Float32Array(gpuOutputReadBuf.getMappedRange());
-          if (!gpuOutputCPU || gpuOutputCPU.length < mapped.length) {
-            gpuOutputCPU = new Float32Array(mapped.length);
+          const range = gpuOutputReadBuf.getMappedRange();
+          if (gpuHasF16) {
+            // f16: mixed types, copy as raw bytes
+            const mapped = new Uint8Array(range);
+            if (!gpuOutputCPU || gpuOutputCPU.byteLength < mapped.byteLength) {
+              gpuOutputCPU = new Uint8Array(mapped.byteLength);
+            }
+            gpuOutputCPU.set(mapped);
+          } else {
+            // f32: all floats
+            const mapped = new Float32Array(range);
+            if (!gpuOutputCPU || gpuOutputCPU.length < mapped.length) {
+              gpuOutputCPU = new Float32Array(mapped.length);
+            }
+            gpuOutputCPU.set(mapped);
           }
-          gpuOutputCPU.set(mapped);
           gpuOutputReadBuf.unmap();
           gpuReadbackPending = false;
           gpuFirstReadback = true;
@@ -2666,7 +3031,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     if (SHOW_RIPPLE_RADIUS && RIPPLE_INNER_RADIUS > 0) {
       const elapsed = rippleClickTime > 0 ? (now - rippleClickTime) / 1000 : 0;
-      const fadeOpacity = rippleClickTime > 0 ? Math.min(1, Math.max(0, (elapsed - 5) / 5)) : 0;
+      const fadeOpacity = rippleClickTime > 0 ? Math.min(1, Math.max(0, (elapsed - 6) / 5)) : 0;
       if (fadeOpacity > 0) {
         const canRect = canvas.getBoundingClientRect();
         const scalePx = canRect.width / w;
@@ -2700,6 +3065,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         const pct = Math.round(ftSmooth / budget * 100);
         ftEl.textContent = `${pct}%`;
         ftEl.style.color = pct < 50 ? '#4caf50' : pct < 75 ? '#f0c040' : '#f44336';
+        ftAvgBuf[ftAvgIdx] = pct;
+        ftAvgIdx = (ftAvgIdx + 1) % FT_AVG_SAMPLES;
+        if (ftAvgCount < FT_AVG_SAMPLES) ftAvgCount++;
+        let ftAvgSum = 0;
+        for (let i = 0; i < ftAvgCount; i++) ftAvgSum += ftAvgBuf[i];
+        ftAvgEl.textContent = `${Math.round(ftAvgSum / ftAvgCount)}%`;
         const burstCount = aliveCount - autoCount;
         debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
         autoStat.statValueEl.textContent = `${autoCount}`;
@@ -2741,14 +3112,25 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         s.vy = Math.sin(angle) * speed;
         s.canWhiten = Math.random() < getWhiteParticleChance();
         s.life = 1; s.alpha = baseAlpha;
-        const tmp = new Float32Array(16);
-        tmp[0] = s.x; tmp[1] = s.y; tmp[2] = s.vx; tmp[3] = s.vy;
-        tmp[4] = Math.random() * Math.PI * 2; tmp[5] = baseAlpha;
-        tmp[6] = Math.random() * 2 + 0.5; tmp[7] = 0;
-        tmp[8] = fadeIn; tmp[9] = 1; tmp[10] = decay; tmp[11] = baseAlpha;
-        tmp[12] = 0; tmp[13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
-        tmp[14] = s.canWhiten ? 1 : 0; tmp[15] = pid;
-        gpuDevice.queue.writeBuffer(gpuParticleBuf, slot * GPU_PARTICLE_STRIDE, tmp);
+        if (gpuHasF16) {
+          const buf = writeParticleF16(
+            s.x, s.y, pid, s.vx, s.vy,
+            Math.random() * Math.PI * 2, baseAlpha,
+            Math.random() * 2 + 0.5, 0, fadeIn, 1, decay, baseAlpha,
+            0, RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
+            s.canWhiten ? 1 : 0
+          );
+          gpuDevice.queue.writeBuffer(gpuParticleBuf, slot * GPU_PARTICLE_STRIDE, buf);
+        } else {
+          const tmp = new Float32Array(16);
+          tmp[0] = s.x; tmp[1] = s.y; tmp[2] = s.vx; tmp[3] = s.vy;
+          tmp[4] = Math.random() * Math.PI * 2; tmp[5] = baseAlpha;
+          tmp[6] = Math.random() * 2 + 0.5; tmp[7] = 0;
+          tmp[8] = fadeIn; tmp[9] = 1; tmp[10] = decay; tmp[11] = baseAlpha;
+          tmp[12] = 0; tmp[13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
+          tmp[14] = s.canWhiten ? 1 : 0; tmp[15] = pid;
+          gpuDevice.queue.writeBuffer(gpuParticleBuf, slot * GPU_PARTICLE_STRIDE, tmp);
+        }
       }
     } else if (GPU_PHYSICS) {
       if (highWater >= BUFFER_CAP && freeSlots.length === 0) return;
