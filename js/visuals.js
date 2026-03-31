@@ -241,8 +241,8 @@ function initHeroCanvas() {
   let gpuLineCountReadBuf = null;  // tiny MAP_READ buffer for connection count debug display
   let gpuLineCount = 0;           // last read line count for debug HUD
   let gpuConnSearchFrame = 0;
-  const MAX_CONN_SLOTS = 4500;
-  const CONN_HASH_SIZE = 8192;
+  const MAX_CONN_SLOTS = 30000;
+  const CONN_HASH_SIZE = 65536;
   const MAX_GRID_CELLS = 256;
 
   // ── WebGPU render state ──────────────────────────────────────────────
@@ -380,12 +380,15 @@ function initHeroCanvas() {
   debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:18ch;width:18ch;text-align:right;white-space:nowrap';
   const debugConnRow = document.createElement('div');
   debugConnRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
+  const debugConnRow2 = document.createElement('div');
+  debugConnRow2.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   const debugPerfRow = document.createElement('div');
   debugPerfRow.style.cssText = 'display:flex;align-items:center;gap:8px';
   debugBar.appendChild(debugTopRow);
   debugBar.appendChild(debugSecondRow);
   debugBar.appendChild(debugThirdRow);
   debugBar.appendChild(debugConnRow);
+  debugBar.appendChild(debugConnRow2);
   debugBar.appendChild(debugPerfRow);
   const debugToggleBtn = document.createElement('button');
   debugToggleBtn.type = 'button';
@@ -730,7 +733,7 @@ function initHeroCanvas() {
       CONN_KILL_ALPHA = +ckSel.value;
       localStorage.setItem('sonara_connKillAlpha', String(CONN_KILL_ALPHA));
     });
-    const connKillPair = appendDebugPair(debugConnRow, 'Kill:', ckSel);
+    const connKillPair = appendDebugPair(debugConnRow2, 'Kill:', ckSel);
     connKillPair.firstChild.style.color = '#e4bc58';
 
     // Line weight (LINE_BASE)
@@ -745,7 +748,7 @@ function initHeroCanvas() {
       lwSel.appendChild(opt);
     }
     lwSel.addEventListener('change', () => { LINE_BASE = +lwSel.value; localStorage.setItem('sonara_lineBase', LINE_BASE); });
-    const lwPair = appendDebugPair(debugConnRow, 'Weight:', lwSel);
+    const lwPair = appendDebugPair(debugConnRow2, 'Weight:', lwSel);
     lwPair.firstChild.style.color = '#e4bc58';
 
     // Fade in rate
@@ -760,7 +763,7 @@ function initHeroCanvas() {
       fiSel.appendChild(opt);
     }
     fiSel.addEventListener('change', () => { CONN_FADE_IN = +fiSel.value; localStorage.setItem('sonara_connFadeIn', CONN_FADE_IN); });
-    const fiPair = appendDebugPair(debugConnRow, 'FadeIn:', fiSel);
+    const fiPair = appendDebugPair(debugConnRow2, 'FadeIn:', fiSel);
     fiPair.firstChild.style.color = '#e4bc58';
 
     // Fade out rate
@@ -775,7 +778,7 @@ function initHeroCanvas() {
       foSel.appendChild(opt);
     }
     foSel.addEventListener('change', () => { CONN_FADE_OUT = +foSel.value; localStorage.setItem('sonara_connFadeOut', CONN_FADE_OUT); });
-    const foPair = appendDebugPair(debugConnRow, 'FadeOut:', foSel);
+    const foPair = appendDebugPair(debugConnRow2, 'FadeOut:', foSel);
     foPair.firstChild.style.color = '#e4bc58';
 
     const ffSel = document.createElement('select');
@@ -1025,7 +1028,7 @@ function initHeroCanvas() {
         copyBtn.disabled = false;
       }, 1200);
     });
-    debugConnRow.appendChild(copyBtn);
+    debugConnRow2.appendChild(copyBtn);
   }
   if (isLocal) {
     canvas.parentElement.appendChild(debugBar);
@@ -2076,10 +2079,11 @@ struct ConnUniforms {
 @group(0) @binding(8) var<storage, read_write> auxPool: array<atomic<u32>>;
 
 const GRID_OFF: u32 = ${MAX_GRID_CELLS}u; // gridOffsets start at gridData[256]
-const NCNT_OFF: u32 = ${MAX_CONN_SLOTS}u; // neighborCount starts at auxPool[4500]
-const HASH_SIZE: u32 = 8192u;
-const HASH_MASK: u32 = 8191u;
+const NCNT_OFF: u32 = ${MAX_CONN_SLOTS}u; // neighborCount starts at auxPool[30000]
+const HASH_SIZE: u32 = 65536u;
+const HASH_MASK: u32 = 65535u;
 const EMPTY: u32 = 0xFFFFFFFFu;
+const TOMBSTONE: u32 = 0xFFFFFFFEu;
 const MAX_PROBE: u32 = 32u;
 
 fn hashKey(pidA: u32, pidB: u32) -> u32 {
@@ -2233,6 +2237,7 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
             break;
           }
           if (stored == EMPTY) { break; }
+          // TOMBSTONE: keep probing (don't break)
         }
 
         if (!found) {
@@ -2256,11 +2261,18 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
           connPool[poolSlot].frozenBx = 0.0;
           connPool[poolSlot].frozenBy = 0.0;
 
+          var inserted = false;
           for (var probe = 0u; probe < MAX_PROBE; probe++) {
             let slot = (h + probe) & HASH_MASK;
-            let old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+            // Try to claim EMPTY slot
+            var old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+            if (!old.exchanged) {
+              // Try to reclaim TOMBSTONE slot
+              old = atomicCompareExchangeWeak(&hashTable[slot * 2u], TOMBSTONE, ck);
+            }
             if (old.exchanged) {
               atomicStore(&hashTable[slot * 2u + 1u], poolSlot);
+              inserted = true;
               break;
             }
             if (old.old_value == ck) {
@@ -2268,8 +2280,12 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
               let existPoolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
               connPool[existPoolIdx].tgt = targetAlpha;
               connPool[existPoolIdx].state = 3u;
+              inserted = true;
               break;
             }
+          }
+          if (!inserted) {
+            connPool[poolSlot].state = 0u;
           }
         }
 
@@ -2309,10 +2325,11 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
         let slot = (h + probe) & HASH_MASK;
         let stored = atomicLoad(&hashTable[slot * 2u]);
         if (stored == ck) {
-          atomicStore(&hashTable[slot * 2u], EMPTY);
+          atomicStore(&hashTable[slot * 2u], TOMBSTONE);
           break;
         }
         if (stored == EMPTY) { break; }
+        // TOMBSTONE: keep probing
       }
       c.state = 0u;
       connPool[i] = c;
@@ -2339,10 +2356,11 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
       let slot = (h + probe) & HASH_MASK;
       let stored = atomicLoad(&hashTable[slot * 2u]);
       if (stored == ck) {
-        atomicStore(&hashTable[slot * 2u], EMPTY);
+        atomicStore(&hashTable[slot * 2u], TOMBSTONE);
         break;
       }
       if (stored == EMPTY) { break; }
+      // TOMBSTONE: keep probing
     }
     c.state = 0u;
     connPool[i] = c;
@@ -2356,6 +2374,15 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
   } else {
     ax = pOut[c.idxA].x; ay = pOut[c.idxA].y;
     bx = pOut[c.idxB].x; by = pOut[c.idxB].y;
+  }
+
+  // Kill cross-screen lines (wrap artifact)
+  let ldx = ax - bx;
+  let ldy = ay - by;
+  if (ldx * ldx + ldy * ldy > cu.connReachSq * 4.0) {
+    c.state = 0u;
+    connPool[i] = c;
+    return;
   }
 
   let lineIdx = atomicAdd(&auxCounters[0], 1u);
@@ -2429,9 +2456,10 @@ struct ConnUniforms {
 @group(1) @binding(2) var<storage, read_write> lineIndirect: array<u32>;
 @group(1) @binding(3) var<storage, read_write> connFreeList: array<u32>;
 
-const HASH_SIZE: u32 = 8192u;
-const HASH_MASK: u32 = 8191u;
+const HASH_SIZE: u32 = 65536u;
+const HASH_MASK: u32 = 65535u;
 const EMPTY: u32 = 0xFFFFFFFFu;
+const TOMBSTONE: u32 = 0xFFFFFFFEu;
 const MAX_PROBE: u32 = 32u;
 
 fn hashKey(pidA: u32, pidB: u32) -> u32 {
@@ -2584,6 +2612,7 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
             break;
           }
           if (stored == EMPTY) { break; }
+          // TOMBSTONE: keep probing
         }
 
         if (!found) {
@@ -2607,11 +2636,18 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
           connPool[poolSlot].frozenBx = 0.0;
           connPool[poolSlot].frozenBy = 0.0;
 
+          var inserted = false;
           for (var probe = 0u; probe < MAX_PROBE; probe++) {
             let slot = (h + probe) & HASH_MASK;
-            let old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+            // Try to claim EMPTY slot
+            var old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+            if (!old.exchanged) {
+              // Try to reclaim TOMBSTONE slot
+              old = atomicCompareExchangeWeak(&hashTable[slot * 2u], TOMBSTONE, ck);
+            }
             if (old.exchanged) {
               atomicStore(&hashTable[slot * 2u + 1u], poolSlot);
+              inserted = true;
               break;
             }
             if (old.old_value == ck) {
@@ -2619,8 +2655,12 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
               let existPoolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
               connPool[existPoolIdx].tgt = targetAlpha;
               connPool[existPoolIdx].state = 3u;
+              inserted = true;
               break;
             }
+          }
+          if (!inserted) {
+            connPool[poolSlot].state = 0u;
           }
         }
 
@@ -2660,10 +2700,11 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
         let slot = (h + probe) & HASH_MASK;
         let stored = atomicLoad(&hashTable[slot * 2u]);
         if (stored == ck) {
-          atomicStore(&hashTable[slot * 2u], EMPTY);
+          atomicStore(&hashTable[slot * 2u], TOMBSTONE);
           break;
         }
         if (stored == EMPTY) { break; }
+        // TOMBSTONE: keep probing
       }
       c.state = 0u;
       connPool[i] = c;
@@ -2690,10 +2731,11 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
       let slot = (h + probe) & HASH_MASK;
       let stored = atomicLoad(&hashTable[slot * 2u]);
       if (stored == ck) {
-        atomicStore(&hashTable[slot * 2u], EMPTY);
+        atomicStore(&hashTable[slot * 2u], TOMBSTONE);
         break;
       }
       if (stored == EMPTY) { break; }
+      // TOMBSTONE: keep probing
     }
     c.state = 0u;
     connPool[i] = c;
@@ -2707,6 +2749,15 @@ fn connFade(@builtin(global_invocation_id) gid: vec3u) {
   } else {
     ax = pOut[c.idxA].x; ay = pOut[c.idxA].y;
     bx = pOut[c.idxB].x; by = pOut[c.idxB].y;
+  }
+
+  // Kill cross-screen lines (wrap artifact)
+  let ldx = ax - bx;
+  let ldy = ay - by;
+  if (ldx * ldx + ldy * ldy > cu.connReachSq * 4.0) {
+    c.state = 0u;
+    connPool[i] = c;
+    return;
   }
 
   let lineIdx = atomicAdd(&connAtomics[0], 1u);
@@ -4991,10 +5042,10 @@ function initHeroCanvas2D() {
     if (particles.length < 2000 && Math.random() < spawnRate) {
       particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: FADE_FRAMES, canWhiten: Math.random() < getWhiteParticleChance() });
     }
-    const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
+    const CELL = CONN_REACH, cols = Math.ceil(w / CELL) + 1, grid = new Map();
     for (let i = 0; i < particles.length; i++) { const p = particles[i]; const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols; const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]); }
-    const buckets = [[], [], [], [], []], MAX_CONN = 2, connCount = new Uint8Array(particles.length);
-    for (const [key, cell] of grid) { const gx = key % cols, gy = (key / cols) | 0; for (let nx = gx; nx <= gx + 1; nx++) { for (let ny = gy - 1; ny <= gy + 1; ny++) { if (nx === gx && ny < gy) continue; const nk = nx + ny * cols, neighbor = nk === key ? cell : grid.get(nk); if (!neighbor) continue; for (let ii = 0; ii < cell.length; ii++) { const ai = cell[ii]; if (connCount[ai] >= MAX_CONN) continue; const a = particles[ai], jStart = nk === key ? ii + 1 : 0; for (let jj = jStart; jj < neighbor.length; jj++) { const bi = neighbor[jj]; if (connCount[bi] >= MAX_CONN) continue; const b = particles[bi], dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy; if (d2 < 19600) { buckets[Math.min((d2 / 3920) | 0, 4)].push(a.x, a.y, b.x, b.y); connCount[ai]++; connCount[bi]++; } } } } } }
+    const buckets = [[], [], [], [], []], connCount = new Uint8Array(particles.length);
+    for (const [key, cell] of grid) { const gx = key % cols, gy = (key / cols) | 0; for (let nx = gx; nx <= gx + 1; nx++) { for (let ny = gy - 1; ny <= gy + 1; ny++) { if (nx === gx && ny < gy) continue; const nk = nx + ny * cols, neighbor = nk === key ? cell : grid.get(nk); if (!neighbor) continue; for (let ii = 0; ii < cell.length; ii++) { const ai = cell[ii]; if (connCount[ai] >= MAX_CONN) continue; const a = particles[ai], jStart = nk === key ? ii + 1 : 0; for (let jj = jStart; jj < neighbor.length; jj++) { const bi = neighbor[jj]; if (connCount[bi] >= MAX_CONN) continue; const b = particles[bi], dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy; if (d2 < CONN_REACH_SQ) { buckets[Math.min((d2 / CONN_BUCKET_DIV) | 0, 4)].push(a.x, a.y, b.x, b.y); connCount[ai]++; connCount[bi]++; } } } } } }
     c.lineWidth = 0.5 + brightnessLevel * 0.5;
     const aiBB = 1 + brightnessLevel * 2, als = [0.06 * aiBB, 0.048 * aiBB, 0.036 * aiBB, 0.024 * aiBB, 0.012 * aiBB];
     for (let b = 0; b < 5; b++) { const lines = buckets[b]; if (!lines.length) continue; c.strokeStyle = `rgba(212,168,67,${als[b]})`; c.beginPath(); for (let k = 0; k < lines.length; k += 4) { c.moveTo(lines[k], lines[k + 1]); c.lineTo(lines[k + 2], lines[k + 3]); } c.stroke(); }
