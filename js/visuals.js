@@ -153,6 +153,7 @@ let LINE_BASE = +(localStorage.getItem('sonara_lineBase') || 0.08);
 let SUPER_CONN = localStorage.getItem('sonara_superConn') === '1';
 let GATHER_SELECT = localStorage.getItem('sonara_gatherSelect') === '1';
 let DUAL_CHECK = localStorage.getItem('sonara_dualCheck') === '1';
+let ONE_OWNER = localStorage.getItem('sonara_oneOwner') === '1';
 let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
 let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
@@ -2428,16 +2429,20 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
     cOther[b] = tmpO; cD2[b] = tmpD; cAlpha[b] = tmpA;
   }
 
-  // Take closest MAX_CONN candidates
-  let take = min(count, cu.maxConn);
-  for (var k = 0u; k < take; k++) {
+  // Take closest candidates, stop when maxConn created
+  var created = 0u;
+  for (var k = 0u; k < count; k++) {
+    if (created >= cu.maxConn) { break; }
     let j = cOther[k];
     let targetAlpha = cAlpha[k];
 
-    // DualCheck: skip if j already has enough connections
-    if (cu.dualCheck != 0u && atomicLoad(&auxPool[j + NCNT_OFF]) >= cu.maxConn) { continue; }
-
     let pidJ = pOut[j].pid;
+
+    // DualCheck: single-owner (only lower pid creates) + bilateral count check
+    if (cu.dualCheck != 0u) {
+      if (pidI >= pidJ) { continue; }
+      if (atomicLoad(&auxPool[j + NCNT_OFF]) >= cu.maxConn) { continue; }
+    }
     let ck = canonKey(pidI, pidJ);
     let h = hashKey(pidI, pidJ);
 
@@ -2503,6 +2508,7 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
 
+    created++;
     atomicAdd(&auxPool[i + NCNT_OFF], 1u);
     if (cu.dualCheck != 0u) { atomicAdd(&auxPool[j + NCNT_OFF], 1u); }
   }
@@ -2980,15 +2986,20 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
     cOther[b] = tmpO; cD2[b] = tmpD; cAlpha[b] = tmpA;
   }
 
-  let take = min(count, cu.maxConn);
-  for (var k = 0u; k < take; k++) {
+  // Take closest candidates, stop when maxConn created
+  var created = 0u;
+  for (var k = 0u; k < count; k++) {
+    if (created >= cu.maxConn) { break; }
     let j = cOther[k];
     let targetAlpha = cAlpha[k];
 
-    // DualCheck: skip if j already has enough connections
-    if (cu.dualCheck != 0u && atomicLoad(&neighborCount[j]) >= cu.maxConn) { continue; }
-
     let pidJ = pOut[j].pid;
+
+    // DualCheck: single-owner (only lower pid creates) + bilateral count check
+    if (cu.dualCheck != 0u) {
+      if (pidI >= pidJ) { continue; }
+      if (atomicLoad(&neighborCount[j]) >= cu.maxConn) { continue; }
+    }
     let ck = canonKey(pidI, pidJ);
     let h = hashKey(pidI, pidJ);
 
@@ -3053,6 +3064,7 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
 
+    created++;
     atomicAdd(&neighborCount[i], 1u);
     if (cu.dualCheck != 0u) { atomicAdd(&neighborCount[j], 1u); }
   }
