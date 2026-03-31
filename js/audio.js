@@ -185,8 +185,13 @@ function preload() {
 function getContext() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx.onstatechange = () => {
+      if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+        ctx.resume();
+      }
+    };
   }
-  if (ctx.state === 'suspended') ctx.resume();
+  if (ctx.state === 'suspended' || ctx.state === 'interrupted') ctx.resume();
   return ctx;
 }
 
@@ -238,6 +243,8 @@ for (let i = heroFiles.length - 1; i > 0; i--) {
 let heroFileIdx = 0;
 let heroStartTime = 0;
 let heroBufDuration = 0;
+let heroPlaybackPos = 0;   // accumulated position in buffer (seconds)
+let heroLastProgressTime = 0;
 
 async function heroSound(ac, master) {
   const nodes = [];
@@ -258,6 +265,8 @@ async function heroSound(ac, master) {
   src.start();
   heroStartTime = now;
   heroBufDuration = buf.duration;
+  heroPlaybackPos = 0;
+  heroLastProgressTime = now;
   nodes.push(src);
   gains.push(g);
   return { nodes, gains };
@@ -813,10 +822,20 @@ export function getHeroAnalyser() {
   return heroAnalyser;
 }
 
+export function getHeroSourceNode() {
+  const entry = activeNodes['hero'];
+  return entry ? entry.nodes[0] : null;
+}
+
 export function getHeroProgress() {
   if (!heroBufDuration || !ctx) return 0;
-  const elapsed = ctx.currentTime - heroStartTime;
-  return (elapsed % heroBufDuration) / heroBufDuration;
+  const now = ctx.currentTime;
+  const dt = now - heroLastProgressTime;
+  heroLastProgressTime = now;
+  const src = activeNodes['hero']?.nodes[0];
+  const rate = src ? src.playbackRate.value : 1;
+  heroPlaybackPos = (heroPlaybackPos + dt * rate) % heroBufDuration;
+  return heroPlaybackPos / heroBufDuration;
 }
 
 export function getCitizenAnalyser() {

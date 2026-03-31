@@ -3,9 +3,10 @@
  * Hero particle field, citizen science waveform, dome starfield, synth wave.
  */
 
-import * as audio from './audio.js?v=8';
+import * as audio from './audio.js?v=9';
 const getStemAnalyser = audio.getStemAnalyser;
 const getHeroAnalyser = audio.getHeroAnalyser;
+const getHeroSourceNode = audio.getHeroSourceNode;
 const getCitizenAnalyser = typeof audio.getCitizenAnalyser === 'function'
   ? audio.getCitizenAnalyser
   : () => null;
@@ -112,6 +113,36 @@ let SPIN_RELEASE = +(localStorage.getItem('sonara_spinRelease') || legacyRmsRele
 let SWIRL_FORCE = +(localStorage.getItem('sonara_swirlForce') || HERO_DEBUG_DEFAULTS.swirlForce);
 let PULL_FORCE = +(localStorage.getItem('sonara_pullForce') || HERO_DEBUG_DEFAULTS.pullForce);
 let FRICTION = +(localStorage.getItem('sonara_friction') || HERO_DEBUG_DEFAULTS.friction);
+function clampLowSpeed(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0.8;
+  return Math.max(0.2, Math.min(1.0, Math.round(num * 20) / 20));
+}
+function clampHighSpeed(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 1.5;
+  return Math.max(0.5, Math.min(2.0, Math.round(num * 20) / 20));
+}
+function clampSpeedClamp(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 1.0;
+  return Math.max(0.5, Math.min(2.0, Math.round(num * 20) / 20));
+}
+function clampSpeedPeriod(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 80;
+  return Math.max(5, Math.min(300, Math.round(num / 5) * 5));
+}
+let VARIABLE_SPEED = localStorage.getItem('sonara_varSpeed') !== '0';
+const legacySpeedDip = localStorage.getItem('sonara_speedDip');
+let LOW_SPEED = clampLowSpeed(
+  localStorage.getItem('sonara_lowSpeed')
+  ?? (legacySpeedDip !== null ? 1 - Number(legacySpeedDip) : 0.8)
+);
+let HIGH_SPEED = clampHighSpeed(localStorage.getItem('sonara_highSpeed') ?? 1.5);
+let SPEED_CLAMP = clampSpeedClamp(localStorage.getItem('sonara_speedClamp') ?? 1.0);
+let SPEED_PERIOD = clampSpeedPeriod(localStorage.getItem('sonara_speedPeriod') || 80);
+let CONN_KILL_ALPHA = +(localStorage.getItem('sonara_connKillAlpha') || 0.01);
 function clampWhiteParticlePct(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return HERO_DEBUG_DEFAULTS.whiteParticlePct;
@@ -173,6 +204,7 @@ function initHeroCanvas() {
 
   // ── WebGPU compute (async init, hot-swaps from CPU when ready) ──────
   let WEBGPU_ACTIVE = false;
+  let gpuFirstReadback = false; // true after first successful readback
   let gpuDevice = null, gpuPhysicsPipeline = null;
   let gpuParticleBuf = null, gpuUniformBuf = null;
   let gpuBrightnessRippleBuf = null, gpuSpinRippleBuf = null;
@@ -254,6 +286,12 @@ function initHeroCanvas() {
     connSkip: CONN_SEARCH_INTERVAL,
     whiteParticlePct: WHITE_PARTICLE_PERCENT,
     whiteBrightnessCap: WHITE_BRIGHTNESS_CAP,
+    varSpeed: VARIABLE_SPEED,
+    lowSpeed: LOW_SPEED,
+    highSpeed: HIGH_SPEED,
+    speedClamp: SPEED_CLAMP,
+    speedPeriod: SPEED_PERIOD,
+    connKillAlpha: Number(CONN_KILL_ALPHA.toFixed(3)),
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
     friction: Number(FRICTION.toFixed(3)),
@@ -268,7 +306,7 @@ function initHeroCanvas() {
   const DEBUG_SECOND_ROW_GAP = 12;
   const DEBUG_PAIR_GAP = 4;
   const DEBUG_SELECT_STYLE = `background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px`;
-  const DEBUG_COPY_BUTTON_STYLE = `background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 11ch;width:11ch;text-align:center;white-space:nowrap`;
+  const DEBUG_COPY_BUTTON_STYLE = `background:#1a1208;color:#c97b2a;border:1px solid rgba(201,123,42,0.45);font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 11ch;width:11ch;text-align:center;white-space:nowrap`;
   const DEBUG_TOGGLE_BUTTON_STYLE = `position:fixed;top:12px;right:12px;z-index:10000;background:rgba(10,10,12,0.1);color:rgba(228,188,88,0.4);border:1px solid rgba(228,188,88,0.09);font:bold 14px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;text-transform:lowercase;box-shadow:0 0 6px rgba(228,188,88,0.025)`;
   const DEBUG_HUD_VISIBLE_KEY = 'sonara_debugHudVisible';
   const appendDebugPair = (rowEl, labelText, controlEl) => {
@@ -282,6 +320,7 @@ function initHeroCanvas() {
     return pairEl;
   };
   const debugBar = document.createElement('div');
+  debugBar.id = 'hero-debug-bar';
   debugBar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:9999;color:#00ccff;font:bold 18px/1 monospace;display:flex;flex-direction:column;align-items:flex-start;gap:8px';
   let debugHudVisible = localStorage.getItem(DEBUG_HUD_VISIBLE_KEY) !== '0';
   const debugTopRow = document.createElement('div');
@@ -291,7 +330,7 @@ function initHeroCanvas() {
   const debugThirdRow = document.createElement('div');
   debugThirdRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   const debugConnCountEl = document.createElement('span');
-  debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;white-space:nowrap';
+  debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:18ch;width:18ch;text-align:right;white-space:nowrap';
   const debugPerfRow = document.createElement('div');
   debugPerfRow.style.cssText = 'display:flex;align-items:center;gap:8px';
   debugBar.appendChild(debugTopRow);
@@ -316,20 +355,33 @@ function initHeroCanvas() {
     localStorage.setItem(DEBUG_HUD_VISIBLE_KEY, debugHudVisible ? '1' : '0');
   };
   if (isLocal) {
+    const blurDebugControl = (el) => {
+      window.setTimeout(() => {
+        if (document.activeElement === el) el.blur();
+      }, 0);
+    };
     debugBar.addEventListener('change', (e) => {
       if (e.target instanceof HTMLSelectElement || e.target instanceof HTMLInputElement) {
-        e.target.blur();
+        blurDebugControl(e.target);
+      }
+    });
+    debugBar.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'number') {
+        blurDebugControl(e.target);
       }
     });
     debugBar.addEventListener('click', (e) => {
       if (e.target instanceof HTMLButtonElement) {
-        window.setTimeout(() => e.target.blur(), 0);
+        blurDebugControl(e.target);
+      }
+      if (e.target instanceof HTMLInputElement && e.target.type === 'checkbox') {
+        blurDebugControl(e.target);
       }
     });
     debugToggleBtn.addEventListener('click', () => {
       debugHudVisible = !debugHudVisible;
       syncDebugHudVisibility();
-      window.setTimeout(() => debugToggleBtn.blur(), 0);
+      blurDebugControl(debugToggleBtn);
     });
   }
   // Connection search interval dropdown (left of FPS)
@@ -493,6 +545,104 @@ function initHeroCanvas() {
     appendDebugPair(debugThirdRow, 'White %:', wpSel);
     appendDebugPair(debugThirdRow, 'White cap:', wcSel);
 
+    const debugGold = '#d8d1bf';
+
+    const varSpeedToggle = document.createElement('input');
+    varSpeedToggle.type = 'checkbox';
+    varSpeedToggle.checked = VARIABLE_SPEED;
+    varSpeedToggle.style.cssText = `margin:0;accent-color:${debugGold}`;
+    varSpeedToggle.addEventListener('change', () => {
+      VARIABLE_SPEED = varSpeedToggle.checked;
+      localStorage.setItem('sonara_varSpeed', VARIABLE_SPEED ? '1' : '0');
+    });
+    const varSpeedPair = appendDebugPair(debugThirdRow, 'Var Speed:', varSpeedToggle);
+    varSpeedPair.firstChild.style.color = debugGold;
+
+    const speedPeriodInput = document.createElement('input');
+    speedPeriodInput.type = 'number';
+    speedPeriodInput.min = '5';
+    speedPeriodInput.max = '300';
+    speedPeriodInput.step = '5';
+    speedPeriodInput.value = String(SPEED_PERIOD);
+    speedPeriodInput.style.cssText = `${DEBUG_SELECT_STYLE};width:6ch;color:${debugGold}`;
+    speedPeriodInput.addEventListener('change', () => {
+      SPEED_PERIOD = clampSpeedPeriod(speedPeriodInput.value);
+      speedPeriodInput.value = String(SPEED_PERIOD);
+      localStorage.setItem('sonara_speedPeriod', SPEED_PERIOD);
+    });
+    const speedPeriodPair = appendDebugPair(debugThirdRow, 'Period:', speedPeriodInput);
+    speedPeriodPair.firstChild.style.color = debugGold;
+
+    const lowSpeedSel = document.createElement('select');
+    lowSpeedSel.style.cssText = `${DEBUG_SELECT_STYLE};color:${debugGold}`;
+    for (let i = 20; i <= 100; i += 5) {
+      const v = i / 100;
+      const opt = document.createElement('option');
+      opt.value = v.toFixed(2);
+      opt.textContent = `${v.toFixed(2)}${Math.abs(v - 0.8) < 0.001 ? ' ★' : ''}`;
+      if (Math.abs(v - LOW_SPEED) < 0.001) opt.selected = true;
+      lowSpeedSel.appendChild(opt);
+    }
+    lowSpeedSel.addEventListener('change', () => {
+      LOW_SPEED = clampLowSpeed(lowSpeedSel.value);
+      lowSpeedSel.value = LOW_SPEED.toFixed(2);
+      localStorage.setItem('sonara_lowSpeed', LOW_SPEED.toFixed(2));
+    });
+    const lowSpeedPair = appendDebugPair(debugThirdRow, 'LowSpd:', lowSpeedSel);
+    lowSpeedPair.firstChild.style.color = debugGold;
+
+    const highSpeedSel = document.createElement('select');
+    highSpeedSel.style.cssText = `${DEBUG_SELECT_STYLE};color:${debugGold}`;
+    for (let i = 50; i <= 200; i += 5) {
+      const v = i / 100;
+      const opt = document.createElement('option');
+      opt.value = v.toFixed(2);
+      opt.textContent = `${v.toFixed(2)}${Math.abs(v - 1.5) < 0.001 ? ' ★' : ''}`;
+      if (Math.abs(v - HIGH_SPEED) < 0.001) opt.selected = true;
+      highSpeedSel.appendChild(opt);
+    }
+    highSpeedSel.addEventListener('change', () => {
+      HIGH_SPEED = clampHighSpeed(highSpeedSel.value);
+      highSpeedSel.value = HIGH_SPEED.toFixed(2);
+      localStorage.setItem('sonara_highSpeed', HIGH_SPEED.toFixed(2));
+    });
+    const highSpeedPair = appendDebugPair(debugThirdRow, 'HighSpd:', highSpeedSel);
+    highSpeedPair.firstChild.style.color = debugGold;
+
+    const speedClampSel = document.createElement('select');
+    speedClampSel.style.cssText = `${DEBUG_SELECT_STYLE};color:${debugGold}`;
+    for (let i = 50; i <= 200; i += 5) {
+      const v = i / 100;
+      const opt = document.createElement('option');
+      opt.value = v.toFixed(2);
+      opt.textContent = `${v.toFixed(2)}${Math.abs(v - 1.0) < 0.001 ? ' ★' : ''}`;
+      if (Math.abs(v - SPEED_CLAMP) < 0.001) opt.selected = true;
+      speedClampSel.appendChild(opt);
+    }
+    speedClampSel.addEventListener('change', () => {
+      SPEED_CLAMP = clampSpeedClamp(speedClampSel.value);
+      speedClampSel.value = SPEED_CLAMP.toFixed(2);
+      localStorage.setItem('sonara_speedClamp', SPEED_CLAMP.toFixed(2));
+    });
+    const speedClampPair = appendDebugPair(debugThirdRow, 'Clamp:', speedClampSel);
+    speedClampPair.firstChild.style.color = debugGold;
+
+    const ckSel = document.createElement('select');
+    ckSel.style.cssText = `${DEBUG_SELECT_STYLE};color:#c084fc`;
+    for (const v of [0.003, 0.01, 0.02, 0.03, 0.05, 0.08, 0.1]) {
+      const opt = document.createElement('option');
+      opt.value = String(v);
+      opt.textContent = `${v}${Math.abs(v - 0.01) < 0.0001 ? ' ★' : ''}`;
+      if (Math.abs(v - CONN_KILL_ALPHA) < 0.0001) opt.selected = true;
+      ckSel.appendChild(opt);
+    }
+    ckSel.addEventListener('change', () => {
+      CONN_KILL_ALPHA = +ckSel.value;
+      localStorage.setItem('sonara_connKillAlpha', String(CONN_KILL_ALPHA));
+    });
+    const connKillPair = appendDebugPair(debugThirdRow, 'Kill α:', ckSel);
+    connKillPair.firstChild.style.color = '#c084fc';
+
   }
 
   // FPS + frame budget display (own row, left-aligned)
@@ -550,10 +700,10 @@ function initHeroCanvas() {
 
   // Particle stats
   const counterEl = document.createElement('span');
-  counterEl.style.cssText = 'pointer-events:none;display:inline-flex;align-items:center;gap:1ch;white-space:nowrap';
+  counterEl.style.cssText = 'pointer-events:none;display:inline-flex;align-items:center;gap:1ch;white-space:nowrap;color:#c9c7c2';
   const createLockedStat = (label) => {
     const statEl = document.createElement('span');
-    statEl.style.cssText = 'display:inline-flex;align-items:center';
+    statEl.style.cssText = 'display:inline-flex;align-items:center;color:#c9c7c2';
 
     const statLabelEl = document.createElement('span');
     statLabelEl.textContent = `${label}:`;
@@ -569,7 +719,7 @@ function initHeroCanvas() {
   const burstStat = createLockedStat('U');
   const totalStat = createLockedStat('T');
   const highWaterEl = document.createElement('span');
-  highWaterEl.style.cssText = 'display:inline-block';
+  highWaterEl.style.cssText = 'display:inline-block;color:#c9c7c2';
   counterEl.appendChild(autoStat.statEl);
   counterEl.appendChild(burstStat.statEl);
   counterEl.appendChild(totalStat.statEl);
@@ -1806,6 +1956,18 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     const scaleY = h / window.innerHeight;
     const mx = mouseX * scaleX, my = mouseY * scaleY;
 
+    // --- Playback speed oscillation ---
+    let speedScale = 1.0;
+    const heroSrc = getHeroSourceNode();
+    if (VARIABLE_SPEED) {
+      const rawSpeed = LOW_SPEED + (HIGH_SPEED - LOW_SPEED) * (Math.sin(now * 0.001 * (2 * Math.PI / SPEED_PERIOD)) * 0.5 + 0.5);
+      const heroSpeed = Math.min(rawSpeed, SPEED_CLAMP);
+      speedScale = heroSpeed;
+      if (heroSrc) heroSrc.playbackRate.value = heroSpeed;
+    } else if (heroSrc) {
+      heroSrc.playbackRate.value = 1.0;
+    }
+
     let autoCount = 0, aliveCount = 0;
     let gpuRenderCount = 0;
 
@@ -1880,8 +2042,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       gpuUniformF32[3] = btnCX;
       gpuUniformF32[4] = btnCY;
       gpuUniformF32[5] = FRICTION;
-      gpuUniformF32[6] = SWIRL_FORCE;
-      gpuUniformF32[7] = PULL_FORCE;
+      gpuUniformF32[6] = SWIRL_FORCE * speedScale;
+      gpuUniformF32[7] = PULL_FORCE * speedScale * speedScale;
       gpuUniformF32[8] = FORCE_RADIUS;
       gpuUniformF32[9] = heroAudioPlaying ? 1.0 : 0.0;
       gpuUniformF32[10] = mouseActive ? mx : 0;
@@ -1898,8 +2060,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       gpuDevice.queue.writeBuffer(gpuBrightnessRippleBuf, 0, brightnessRippleBuf);
       gpuDevice.queue.writeBuffer(gpuSpinRippleBuf, 0, spinRippleBuf);
 
-      // --- Process PREVIOUS frame's readback (one frame latency) ---
-      if (gpuOutputCPU) {
+      // --- Process PREVIOUS frame's readback (skip until first real readback) ---
+      if (gpuOutputCPU && gpuFirstReadback) {
         const out = gpuOutputCPU;
         const outU32 = new Uint32Array(out.buffer, out.byteOffset, out.length);
         let pIdx = 0;
@@ -1919,11 +2081,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
           if (dead) {
             if (!s.dead) {
-              // Kill all connections referencing this particle before freeing the slot
+              // Fade out all connections — snapshot positions so slot reuse can't corrupt them
               const pid = s.pid;
-              for (const [ck] of connFade) {
+              for (const [ck, entry] of connFade) {
                 if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
-                  connFade.delete(ck);
+                  entry.target = 0;
+                  entry.ax = entry.a.x; entry.ay = entry.a.y;
+                  entry.bx = entry.b.x; entry.by = entry.b.y;
+                  entry.frozen = true;
                 }
               }
               s.dead = true;
@@ -1937,7 +2102,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             // life is managed on GPU, detect death via dead flag above
           }
 
-          // Wrap cleanup — delete connections for wrapped particles
+          // Wrap cleanup — instant delete (particle teleported, fade would draw cross-screen)
           if (wrapped) {
             const pid = s.pid;
             for (const [ck] of connFade) {
@@ -1990,6 +2155,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           gpuOutputCPU.set(mapped);
           gpuOutputReadBuf.unmap();
           gpuReadbackPending = false;
+          gpuFirstReadback = true;
         }).catch(() => { gpuReadbackPending = false; });
       }
 
@@ -2083,6 +2249,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         p.pid = pids[i];
         p.life = life;
         if (life < -900) {
+          if (!p.dead) {
+            const pid = p.pid;
+            for (const [ck, entry] of connFade) {
+              if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
+                entry.target = 0;
+                entry.ax = entry.a.x; entry.ay = entry.a.y;
+                entry.bx = entry.b.x; entry.by = entry.b.y;
+                entry.frozen = true;
+              }
+            }
+          }
           p.dead = true;
           if (!isFree[i]) { freeSlots.push(i); isFree[i] = 1; }
         } else {
@@ -2259,25 +2436,31 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let lineIdx = 0;
     const toDelete = [];
     for (const [ck, entry] of connFade) {
-      if (entry.a.dead || entry.b.dead) {
+      if (!entry.frozen && (entry.a.dead || entry.b.dead)) {
         entry.target = 0;
+        entry.ax = entry.a.x; entry.ay = entry.a.y;
+        entry.bx = entry.b.x; entry.by = entry.b.y;
+        entry.frozen = true;
       }
       if (doConnSearch && !framePairs.has(ck)) {
         entry.target = 0;
       }
       const rate = entry.target > entry.alpha ? CONN_FADE_IN : CONN_FADE_OUT;
       entry.alpha += (entry.target - entry.alpha) * rate;
-      if (entry.alpha < 0.003 && entry.target === 0) {
+      if (entry.alpha < CONN_KILL_ALPHA && entry.target === 0) {
         toDelete.push(ck);
         continue;
       }
       if (lineIdx < MAX_LINES * LFLOATS) {
-        const a = entry.a, b = entry.b;
-        lineData[lineIdx++] = a.x;
-        lineData[lineIdx++] = a.y;
+        const ax = entry.frozen ? entry.ax : entry.a.x;
+        const ay = entry.frozen ? entry.ay : entry.a.y;
+        const bx = entry.frozen ? entry.bx : entry.b.x;
+        const by = entry.frozen ? entry.by : entry.b.y;
+        lineData[lineIdx++] = ax;
+        lineData[lineIdx++] = ay;
         lineData[lineIdx++] = entry.alpha;
-        lineData[lineIdx++] = b.x;
-        lineData[lineIdx++] = b.y;
+        lineData[lineIdx++] = bx;
+        lineData[lineIdx++] = by;
         lineData[lineIdx++] = entry.alpha;
       }
     }
@@ -2334,10 +2517,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           const proximity = Math.max(0, 1 - dist / attenuationRadius);
           if (localSpinIntensity > 0.01 && proximity > 0) {
             const nx = dxB / dist, ny = dyB / dist;
-            const swirlStr = localSpinIntensity * proximity * SWIRL_FORCE;
+            const swirlStr = localSpinIntensity * proximity * SWIRL_FORCE * speedScale;
             p.vx += -ny * swirlStr;
             p.vy += nx * swirlStr;
-            const pull = localSpinIntensity * proximity * PULL_FORCE;
+            const pull = localSpinIntensity * proximity * PULL_FORCE * speedScale * speedScale;
             p.vx -= nx * pull;
             p.vy -= ny * pull;
             const jit = react * 0.25 * localSpinIntensity;
@@ -2590,7 +2773,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   });
   resize();
-  init();
+  // If WebGPU is expected, skip CPU init — initWebGPU() will call init() when ready
+  if (!navigator.gpu) init();
   registerDraw(draw);
 }
 

@@ -3,8 +3,8 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress } from './audio.js?v=8';
-import { initVisuals } from './visuals.js?v=13';
+import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress } from './audio.js?v=9';
+import { initVisuals } from './visuals.js?v=27';
 
 (function() {
   'use strict';
@@ -730,6 +730,7 @@ import { initVisuals } from './visuals.js?v=13';
 
   window.addEventListener('keydown', (e) => {
     const targetTag = e.target?.tagName;
+    const isDebugHudTarget = !!e.target?.closest?.('#hero-debug-bar');
     const isEditableTarget = ['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag) || e.target?.isContentEditable;
     const isButtonTarget = targetTag === 'BUTTON';
     const isFormTarget = isEditableTarget || isButtonTarget;
@@ -744,7 +745,7 @@ import { initVisuals } from './visuals.js?v=13';
       return;
     }
     if (isSpaceKey) {
-      if (isEditableTarget || isButtonTarget) return;
+      if ((isEditableTarget || isButtonTarget) && !isDebugHudTarget) return;
       e.preventDefault();
       const activeSection = allSections[getClosestSectionIdx()];
       if (activeSection?.id === 'hero' && heroBtn) {

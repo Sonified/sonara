@@ -113,6 +113,10 @@ a:hover { opacity: 0.7; }
   display: none;
 }
 
+#hero::after {
+  height: 5vh;
+}
+
 #contact::after {
   display: none;
 }
