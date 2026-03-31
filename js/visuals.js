@@ -152,6 +152,7 @@ let CONN_FADE_OUT = +(localStorage.getItem('sonara_connFadeOut') || 0.025);
 let LINE_BASE = +(localStorage.getItem('sonara_lineBase') || 0.08);
 let SUPER_CONN = localStorage.getItem('sonara_superConn') === '1';
 let GATHER_SELECT = localStorage.getItem('sonara_gatherSelect') === '1';
+let DUAL_CHECK = localStorage.getItem('sonara_dualCheck') === '1';
 let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
 let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
@@ -340,6 +341,7 @@ function initHeroCanvas() {
     lineBase: Number(LINE_BASE.toFixed(2)),
     superConn: SUPER_CONN,
     gatherSelect: GATHER_SELECT,
+    dualCheck: DUAL_CHECK,
     fadeUpSecs: FADE_UP_SECS,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
@@ -635,6 +637,22 @@ function initHeroCanvas() {
     });
     const gsPair = appendDebugPair(debugConnRow, 'GatherSel:', gsToggle);
     gsPair.firstChild.style.color = '#e4bc58';
+
+    const dcToggle = document.createElement('input');
+    dcToggle.type = 'checkbox';
+    dcToggle.checked = DUAL_CHECK;
+    dcToggle.style.cssText = 'margin:0;accent-color:#e4bc58';
+    dcToggle.disabled = !GATHER_SELECT;
+    dcToggle.addEventListener('change', () => {
+      DUAL_CHECK = dcToggle.checked;
+      localStorage.setItem('sonara_dualCheck', DUAL_CHECK ? '1' : '0');
+    });
+    const dcPair = appendDebugPair(debugConnRow, 'DualCheck:', dcToggle);
+    dcPair.firstChild.style.color = GATHER_SELECT ? '#e4bc58' : '#666';
+    gsToggle.addEventListener('change', () => {
+      dcToggle.disabled = !GATHER_SELECT;
+      dcPair.firstChild.style.color = GATHER_SELECT ? '#e4bc58' : '#666';
+    });
 
     const dSel = document.createElement('select');
     dSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
@@ -2078,7 +2096,7 @@ struct ConnUniforms {
   particleCount: u32,
   maxConnSlots: u32,
   lineBase: f32,
-  superConn: u32, _pad1: u32,
+  superConn: u32, dualCheck: u32,
   _pad2: u32, _pad3: u32,
 };
 
@@ -2415,6 +2433,10 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
   for (var k = 0u; k < take; k++) {
     let j = cOther[k];
     let targetAlpha = cAlpha[k];
+
+    // DualCheck: skip if j already has enough connections
+    if (cu.dualCheck != 0u && atomicLoad(&auxPool[j + NCNT_OFF]) >= cu.maxConn) { continue; }
+
     let pidJ = pOut[j].pid;
     let ck = canonKey(pidI, pidJ);
     let h = hashKey(pidI, pidJ);
@@ -2482,6 +2504,7 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     atomicAdd(&auxPool[i + NCNT_OFF], 1u);
+    if (cu.dualCheck != 0u) { atomicAdd(&auxPool[j + NCNT_OFF], 1u); }
   }
 }
 
@@ -2630,7 +2653,7 @@ struct ConnUniforms {
   particleCount: u32,
   maxConnSlots: u32,
   lineBase: f32,
-  superConn: u32, _pad1: u32,
+  superConn: u32, dualCheck: u32,
   _pad2: u32, _pad3: u32,
 };
 
@@ -2961,6 +2984,10 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
   for (var k = 0u; k < take; k++) {
     let j = cOther[k];
     let targetAlpha = cAlpha[k];
+
+    // DualCheck: skip if j already has enough connections
+    if (cu.dualCheck != 0u && atomicLoad(&neighborCount[j]) >= cu.maxConn) { continue; }
+
     let pidJ = pOut[j].pid;
     let ck = canonKey(pidI, pidJ);
     let h = hashKey(pidI, pidJ);
@@ -3027,6 +3054,7 @@ fn connSelect(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     atomicAdd(&neighborCount[i], 1u);
+    if (cu.dualCheck != 0u) { atomicAdd(&neighborCount[j], 1u); }
   }
 }
 
@@ -4434,6 +4462,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
         connUniformU32[14] = MAX_CONN_SLOTS;
         connUniformData[15] = LINE_BASE;
         connUniformU32[16] = SUPER_CONN ? 1 : 0;
+        connUniformU32[17] = DUAL_CHECK ? 1 : 0;
         gpuDevice.queue.writeBuffer(gpuConnUniformBuf, 0, connUniformData);
 
         // Reset atomic counters: [0]=line count, [1]=free list count
