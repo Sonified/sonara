@@ -844,7 +844,7 @@ function initHeroCanvas() {
 
   const rippleRadiusOverlay = document.createElement('div');
   rippleRadiusOverlay.style.cssText = 'position:absolute;left:0;top:0;border:1px solid rgba(228,188,88,0.75);border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.2),0 0 18px rgba(228,188,88,0.18);opacity:0;display:none;transform:translate(-50%,-50%);z-index:3';
-  if (isLocal && canvas.parentElement) {
+  if (canvas.parentElement) {
     const parentStyle = window.getComputedStyle(canvas.parentElement);
     if (parentStyle.position === 'static') {
       canvas.parentElement.style.position = 'relative';
@@ -2644,21 +2644,19 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     gl.bindVertexArray(null);
 
-    if (isLocal) {
-      if (SHOW_RIPPLE_RADIUS && RIPPLE_INNER_RADIUS > 0) {
-        const canRect = canvas.getBoundingClientRect();
-        const scalePx = canRect.width / w;
-        const radiusPx = RIPPLE_INNER_RADIUS * scalePx;
-        rippleRadiusOverlay.style.display = 'block';
-        rippleRadiusOverlay.style.opacity = '1';
-        rippleRadiusOverlay.style.width = `${radiusPx * 2}px`;
-        rippleRadiusOverlay.style.height = `${radiusPx * 2}px`;
-        rippleRadiusOverlay.style.left = `${(btnCX / w) * canRect.width}px`;
-        rippleRadiusOverlay.style.top = `${(btnCY / h) * canRect.height}px`;
-      } else {
-        rippleRadiusOverlay.style.display = 'none';
-        rippleRadiusOverlay.style.opacity = '0';
-      }
+    if (SHOW_RIPPLE_RADIUS && RIPPLE_INNER_RADIUS > 0) {
+      const canRect = canvas.getBoundingClientRect();
+      const scalePx = canRect.width / w;
+      const radiusPx = RIPPLE_INNER_RADIUS * scalePx;
+      rippleRadiusOverlay.style.display = 'block';
+      rippleRadiusOverlay.style.opacity = '1';
+      rippleRadiusOverlay.style.width = `${radiusPx * 2}px`;
+      rippleRadiusOverlay.style.height = `${radiusPx * 2}px`;
+      rippleRadiusOverlay.style.left = `${(btnCX / w) * canRect.width}px`;
+      rippleRadiusOverlay.style.top = `${(btnCY / h) * canRect.height}px`;
+    } else {
+      rippleRadiusOverlay.style.display = 'none';
+      rippleRadiusOverlay.style.opacity = '0';
     }
 
     if (isLocal && debugHudVisible) {
