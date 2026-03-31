@@ -9,11 +9,17 @@
   <script>
     // Detect mobile once at load — never re-evaluate on resize
     (function(){
-      var w = window.innerWidth, touch = 'ontouchstart' in window,
-          coarse = matchMedia('(pointer:coarse)').matches,
-          portrait = w < window.innerHeight;
-      if (w <= 768 && (touch || coarse || portrait))
-        document.documentElement.classList.add('is-mobile');
+      function checkMobile() {
+        var w = window.innerWidth, touch = 'ontouchstart' in window,
+            coarse = matchMedia('(pointer:coarse)').matches,
+            portrait = w < window.innerHeight;
+        if (w <= 768 && (touch || coarse || portrait))
+          document.documentElement.classList.add('is-mobile');
+        else
+          document.documentElement.classList.remove('is-mobile');
+      }
+      checkMobile();
+      window.addEventListener('resize', checkMobile);
     })();
   </script>
   <link rel="stylesheet" href="styles.css?v=2">
@@ -36,6 +42,7 @@
     </div>
     <div class="hero-inner">
       <!-- <div class="hero-badge">NASA Science Activated</div> -->
+      <div id="audio-toast" style="opacity:0;transition:opacity 0.4s;pointer-events:none;text-align:center;color:#f4a261;font-size:0.85rem;letter-spacing:0.04em;margin-bottom:0.5rem;min-height:1.2em;"></div>
       <h1 class="hero-title"><span class="glow-wrap">SONARA</span><canvas id="rays-canvas"></canvas></h1>
       <p class="hero-expansion"><span class="hero-expansion-lead">Sounds of NASA</span>: <span class="hero-expansion-strong">Research Activated</span></p>
       <p class="hero-tagline"><span class="hero-tagline-line">Turning satellite data into sound. Turning</span><br><span class="hero-tagline-line">musicians into scientists.</span></p>
@@ -322,7 +329,7 @@
 
   <script src="js/rays.js?v=9"></script>
   <script type="module" src="js/audio.js?v=9"></script>
-  <script type="module" src="js/visuals.js?v=27"></script>
-  <script type="module" src="js/main.js?v=32"></script>
+  <script type="module" src="js/visuals.js?v=28"></script>
+  <script type="module" src="js/main.js?v=33"></script>
 </body>
 </html>

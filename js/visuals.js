@@ -103,7 +103,7 @@ const HERO_SOFT_WHITE_TINT = { r: 1.0, g: 0.97, b: 0.93 };
 let RIPPLE_SPEED_BASE = +(localStorage.getItem('sonara_rippleBase') || HERO_DEBUG_DEFAULTS.rippleBase);
 let RIPPLE_SPEED_VAR = +(localStorage.getItem('sonara_rippleVariance') || HERO_DEBUG_DEFAULTS.rippleVariance);
 let RIPPLE_INNER_RADIUS = +(localStorage.getItem('sonara_rippleInnerRadius') || HERO_DEBUG_DEFAULTS.rippleInnerRadius);
-let SHOW_RIPPLE_RADIUS = localStorage.getItem('sonara_showRippleRadius') === '1';
+let SHOW_RIPPLE_RADIUS = localStorage.getItem('sonara_showRippleRadius') !== '0';
 const legacyRmsAttack = localStorage.getItem('sonara_rmsAttack');
 const legacyRmsRelease = localStorage.getItem('sonara_rmsRelease');
 let BRIGHTNESS_ATTACK = +(localStorage.getItem('sonara_brightnessAttack') || legacyRmsAttack || HERO_DEBUG_DEFAULTS.brightnessAttack);
@@ -860,6 +860,28 @@ function initHeroCanvas() {
     sounds: document.querySelector('.hero-expansion'),
     sonara: document.querySelector('.hero-title'),
   };
+  function getElementCanvasCenter(el) {
+    if (!el) return null;
+    const elRect = el.getBoundingClientRect();
+    if (elRect.width <= 0) return null;
+    const canRect = canvas.getBoundingClientRect();
+    const scaleX = w / canRect.width;
+    const scaleY = h / canRect.height;
+    let tx = 0;
+    let ty = 0;
+    const transform = window.getComputedStyle(el).transform;
+    if (transform && transform !== 'none') {
+      try {
+        const matrix = new DOMMatrixReadOnly(transform);
+        tx = matrix.m41;
+        ty = matrix.m42;
+      } catch {}
+    }
+    return {
+      x: (elRect.left + elRect.width * 0.5 - tx - canRect.left) * scaleX,
+      y: (elRect.top + elRect.height * 0.5 - ty - canRect.top) * scaleY,
+    };
+  }
 
   let heroAudioPlaying = false;
   let brightnessIntensity = 0;
@@ -1773,7 +1795,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         initData[off + 5]  = alpha;
         initData[off + 6]  = Math.random() * 2 + 0.5;      // r
         initData[off + 7]  = 0;  // age
-        initData[off + 8]  = 0;  // fadeIn
+        initData[off + 8]  = 120;  // fadeIn
         initData[off + 9]  = 0;  // life (0 = auto-particle)
         initData[off + 10] = 0;  // decay
         initData[off + 11] = 0;  // baseAlpha
@@ -1944,11 +1966,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let btnCX = w * 0.5, btnCY = h * 0.5;
     const centerEl = swirlCenterEls[swirlCenterTarget] || listenBtn;
     if (!isMobileView && centerEl) {
-      const elRect = centerEl.getBoundingClientRect();
-      if (elRect.width > 0) {
-        const canRect = canvas.getBoundingClientRect();
-        btnCX = (elRect.left + elRect.width * 0.5 - canRect.left) * (w / canRect.width);
-        btnCY = (elRect.top + elRect.height * 0.5 - canRect.top) * (h / canRect.height);
+      const center = getElementCanvasCenter(centerEl);
+      if (center) {
+        btnCX = center.x;
+        btnCY = center.y;
       }
     }
 
@@ -2077,6 +2098,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           const wrapped = (flags & 8) !== 0;
 
           const s = gpuSlots[i];
+          s.prevX = s.x; s.prevY = s.y;
           s.x = px; s.y = py; s.vx = pvx; s.vy = pvy;
 
           if (dead) {
@@ -2103,7 +2125,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           }
 
           // Wrap cleanup — instant delete (particle teleported, fade would draw cross-screen)
-          if (wrapped) {
+          // Also detect wraps by position jump in case GPU flag was overwritten between readbacks
+          const posJumped = !s.dead && (Math.abs(px - s.prevX) > w * 0.25 || Math.abs(py - s.prevY) > h * 0.25);
+          if (wrapped || posJumped) {
             const pid = s.pid;
             for (const [ck] of connFade) {
               if ((ck / 65536 | 0) === pid || (ck % 65536) === pid) {
@@ -2420,6 +2444,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
                   entry.target = targetAlpha;
                   entry.a = a;
                   entry.b = b;
+                  entry.frozen = false;
                 }
                 connCount[ai]++;
                 connCount[bi]++;
@@ -2456,6 +2481,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         const ay = entry.frozen ? entry.ay : entry.a.y;
         const bx = entry.frozen ? entry.bx : entry.b.x;
         const by = entry.frozen ? entry.by : entry.b.y;
+        // const cdx = ax - bx, cdy = ay - by;
+        // const cDist2 = cdx * cdx + cdy * cdy;
+        // if (!entry.frozen && cDist2 > w * w * 0.25) {
+        //   const pidA = ck / 65536 | 0, pidB = ck % 65536;
+        //   console.warn('cross-screen conn', { dist: Math.sqrt(cDist2).toFixed(0), pidA, pidB, ax: ax.toFixed(0), ay: ay.toFixed(0), bx: bx.toFixed(0), by: by.toFixed(0), alpha: entry.alpha.toFixed(3), target: entry.target });
+        //   toDelete.push(ck);
+        //   continue;
+        // }
         lineData[lineIdx++] = ax;
         lineData[lineIdx++] = ay;
         lineData[lineIdx++] = entry.alpha;
@@ -2648,7 +2681,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         burstStat.statValueEl.textContent = `${burstCount}`;
         totalStat.statValueEl.textContent = `${aliveCount}`;
         highWaterEl.textContent = WEBGPU_ACTIVE ? `WebGPU HW:${gpuWatermark}` : (GPU_PHYSICS ? `HW:${highWater}` : '');
-        console.log(`grid:${grid.size} conn:${connFade.size} particles:${WEBGPU_ACTIVE ? gpuWatermark : (GPU_PHYSICS ? highWater : particles.length)} pid:${nextPid}${WEBGPU_ACTIVE ? ' [WebGPU]' : ''}`);
+        // console.log(`grid:${grid.size} conn:${connFade.size} particles:${WEBGPU_ACTIVE ? gpuWatermark : (GPU_PHYSICS ? highWater : particles.length)} pid:${nextPid}${WEBGPU_ACTIVE ? ' [WebGPU]' : ''}`);
       }
     }
   }
@@ -2901,7 +2934,13 @@ function initHeroCanvas2D() {
     const aiBB = 1 + brightnessLevel * 2, als = [0.06 * aiBB, 0.048 * aiBB, 0.036 * aiBB, 0.024 * aiBB, 0.012 * aiBB];
     for (let b = 0; b < 5; b++) { const lines = buckets[b]; if (!lines.length) continue; c.strokeStyle = `rgba(212,168,67,${als[b]})`; c.beginPath(); for (let k = 0; k < lines.length; k += 4) { c.moveTo(lines[k], lines[k + 1]); c.lineTo(lines[k + 2], lines[k + 3]); } c.stroke(); }
     let btnCX = w * 0.5, btnCY = h * 0.5;
-    if (!isMobileView && listenBtn) { const br = listenBtn.getBoundingClientRect(); if (br.width > 0) { const cr = canvas.getBoundingClientRect(); btnCX = (br.left + br.width * 0.5 - cr.left) * (w / cr.width); btnCY = (br.top + br.height * 0.5 - cr.top) * (h / cr.height); } }
+    if (!isMobileView && listenBtn) {
+      const center = getElementCanvasCenter(listenBtn);
+      if (center) {
+        btnCX = center.x;
+        btnCY = center.y;
+      }
+    }
     const scaleX = w / window.innerWidth, scaleY = h / window.innerHeight, mx = mouseX * scaleX, my = mouseY * scaleY;
     const glowList = [];
     for (let i = 0; i < particles.length; i++) {

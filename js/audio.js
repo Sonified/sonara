@@ -4,7 +4,10 @@
  */
 
 let ctx = null;
+let deadCtx = null; // orphaned context kept for possible resume
 const activeNodes = {};
+let onAudioDeviceLost = null; // callback set by main.js
+let onAudioDeviceRecovered = null; // callback set by main.js
 let stemAnalyser = null;
 let heroAnalyser = null;
 let citizenAnalyser = null;
@@ -182,14 +185,142 @@ function preload() {
   buildPeriodicWaves();
 }
 
+// Try to revive an orphaned context (async, non-blocking). Call before getContext()
+// in async paths (like play()) to avoid the synchronous new AudioContext() freeze.
+async function tryReviveContext() {
+  if (ctx || !deadCtx) return;
+  console.log('[audio] attempting to revive dead context...');
+  try {
+    await deadCtx.resume();
+    const t0 = deadCtx.currentTime;
+    await new Promise(r => setTimeout(r, 300));
+    if (deadCtx.currentTime > t0) {
+      console.log('[audio] dead context revived!');
+      ctx = deadCtx;
+      deadCtx = null;
+      ctx.onstatechange = () => {
+        if (!ctx) return;
+        if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+          ctx.resume().catch(() => {});
+        }
+      };
+      return;
+    }
+    console.log('[audio] dead context resume failed (clock still frozen)');
+  } catch(e) {
+    console.log('[audio] dead context resume threw:', e);
+  }
+  // Keep deadCtx around — next play attempt will try revive again
+  // instead of falling through to new AudioContext() which freezes.
+}
+
 function getContext() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     ctx.onstatechange = () => {
+      if (!ctx) return; // context was destroyed by watchdog
+      console.log('[audio] ctx.onstatechange →', ctx.state);
       if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
-        ctx.resume();
+        console.log('[audio] auto-resuming from', ctx.state);
+        ctx.resume().then(() => { if (ctx) console.log('[audio] resume resolved, state:', ctx.state); })
+                     .catch(e => console.warn('[audio] resume failed:', e));
       }
     };
+    // When audio device changes (switch speakers/headphones/etc), do a controlled
+    // suspend→resume so the context rebinds cleanly instead of racing other tabs.
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.ondevicechange = () => {
+        console.log('[audio] devicechange fired, ctx.state:', ctx ? ctx.state : 'no ctx');
+        if (ctx && ctx.state === 'running') {
+          // Force rebind to current default output device (Chrome-only, no-op elsewhere)
+          if (ctx.setSinkId) {
+            ctx.setSinkId('').then(() => console.log('[audio] setSinkId rebind complete'))
+                             .catch(e => console.warn('[audio] setSinkId rebind failed:', e));
+          }
+          console.log('[audio] suspending for device rebind...');
+          ctx.suspend().then(() => {
+            console.log('[audio] suspended, waiting 200ms...');
+            setTimeout(() => {
+              console.log('[audio] resuming after device change...');
+              ctx.resume().then(() => console.log('[audio] device rebind complete, state:', ctx.state))
+                          .catch(e => console.warn('[audio] device rebind resume failed:', e));
+            }, 200);
+          });
+        }
+      };
+    }
+    // Watchdog: detect when context says "running" but audio clock is frozen
+    // (device vanished without triggering onstatechange or devicechange).
+    // Recovery: tear down dead context, create fresh one, replay active sounds.
+    let lastWatchdogTime = ctx.currentTime;
+    let stallCount = 0;
+    let recovering = false;
+    setInterval(() => {
+      if (!ctx || ctx.state !== 'running' || recovering) { stallCount = 0; return; }
+      const now = ctx.currentTime;
+      if (now === lastWatchdogTime) {
+        stallCount++;
+        console.log('[audio] watchdog: clock stalled, count:', stallCount);
+        if (stallCount >= 3) {
+          recovering = true;
+          console.warn('[audio] watchdog: audio device lost — rebuilding context');
+          // Capture which sounds were playing
+          const wasPlaying = Object.keys(activeNodes);
+          // Kill all active nodes on the dead context
+          wasPlaying.forEach(id => { try { killNow(id); } catch(e) {} });
+          // Abandon the dead context — do NOT call .close(), it can wedge
+          // coreaudiod at the OS level if the audio device is already gone.
+          // Keep as deadCtx so we can try to revive it (async, non-blocking)
+          // instead of calling new AudioContext() which freezes the main thread.
+          ctx.onstatechange = null;
+          deadCtx = ctx;
+          ctx = null;
+          // PeriodicWaves ARE tied to a context — must rebuild on new ctx
+          Object.keys(periodicWaveCache).forEach(k => delete periodicWaveCache[k]);
+          preloaded = false;
+          recovering = false;
+          stallCount = 0;
+          lastWatchdogTime = 0;
+          console.log('[audio] watchdog: context destroyed, polling for device recovery');
+          if (onAudioDeviceLost) onAudioDeviceLost(wasPlaying);
+          // Poll the dead context — when the device comes back, auto-replay
+          const reviveInterval = setInterval(async () => {
+            if (!deadCtx || ctx) { clearInterval(reviveInterval); return; }
+            try {
+              await deadCtx.resume();
+              const t0 = deadCtx.currentTime;
+              await new Promise(r => setTimeout(r, 300));
+              if (deadCtx.currentTime > t0) {
+                clearInterval(reviveInterval);
+                console.log('[audio] device recovered! Auto-replaying...');
+                ctx = deadCtx;
+                deadCtx = null;
+                ctx.onstatechange = () => {
+                  if (!ctx) return;
+                  if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                    ctx.resume().catch(() => {});
+                  }
+                };
+                // Rebuild PeriodicWaves on revived context
+                preloaded = false;
+                preload();
+                // Re-setup watchdog for the revived context
+                lastWatchdogTime = ctx.currentTime;
+                stallCount = 0;
+                // Replay what was playing and notify UI
+                for (const id of wasPlaying) {
+                  play(id).catch(() => {});
+                }
+                if (onAudioDeviceRecovered) onAudioDeviceRecovered(wasPlaying);
+              }
+            } catch(e) { /* still dead, keep polling */ }
+          }, 500);
+        }
+      } else {
+        stallCount = 0;
+      }
+      lastWatchdogTime = now;
+    }, 1000);
   }
   if (ctx.state === 'suspended' || ctx.state === 'interrupted') ctx.resume();
   return ctx;
@@ -670,9 +801,57 @@ export function setStemPattern(pat) {
 }
 
 export async function play(id) {
+  console.log('[audio] play() called, id:', id, 'ctx state:', ctx ? ctx.state : 'no ctx');
   if (id === 'stem-music' && activeNodes[id]) { seqRestart(); activeNodes[id].pattern.startTime = getContext().currentTime; return true; }
   if (activeNodes[id]) return false; // already playing
 
+  // Canary: before creating a new AudioContext (synchronous, blocks main thread),
+  // test if the audio output pipeline is alive using new Audio() + .play().
+  // new Audio() is a DOM element — instant, no hardware init. .play() returns a
+  // Promise that resolves only if the browser can actually route audio to a device.
+  // If coreaudiod is wedged, .play() will hang — we race it against a timeout.
+  if (!ctx && !deadCtx) {
+    console.log('[audio] canary: testing audio pipeline with silent Audio element...');
+    const silence = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+    silence.volume = 0;
+    const canaryOk = await Promise.race([
+      silence.play().then(() => { silence.pause(); silence.remove(); return true; }),
+      new Promise(r => setTimeout(() => r(false), 200))
+    ]).catch(() => {
+      // .play() rejected — could be autoplay policy (that's fine, system is alive)
+      // or actual audio failure. Autoplay rejection is fast; a hang means wedged.
+      return true; // rejection = system responded = alive
+    });
+    if (!canaryOk) {
+      console.warn('[audio] canary: audio pipeline not responding — skipping AudioContext');
+      // Poll until audio comes back
+      const canaryPoll = setInterval(async () => {
+        if (ctx) { clearInterval(canaryPoll); return; }
+        const s = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+        s.volume = 0;
+        const ok = await Promise.race([
+          s.play().then(() => { s.pause(); s.remove(); return true; }),
+          new Promise(r => setTimeout(() => r(false), 500))
+        ]).catch(() => true);
+        if (ok) {
+          clearInterval(canaryPoll);
+          console.log('[audio] canary: audio pipeline recovered! Auto-playing...');
+          play(id).then(() => {
+            if (onAudioDeviceRecovered) onAudioDeviceRecovered([id]);
+          }).catch(() => {});
+        }
+      }, 500);
+      return 'device-error';
+    }
+    console.log('[audio] canary: audio pipeline OK');
+  }
+
+  const hadDeadCtx = !!deadCtx;
+  await tryReviveContext();
+  if (hadDeadCtx && !ctx) {
+    console.warn('[audio] play() aborted — device still unavailable');
+    return 'device-error';
+  }
   const ac = getContext();
   preload();
   const master = createMaster(ac);
@@ -848,4 +1027,12 @@ export function getStemPattern() {
 
 export function stopAll() {
   Object.keys(activeNodes).forEach(id => stop(id));
+}
+
+export function setOnAudioDeviceLost(cb) {
+  onAudioDeviceLost = cb;
+}
+
+export function setOnAudioDeviceRecovered(cb) {
+  onAudioDeviceRecovered = cb;
 }

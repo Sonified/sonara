@@ -3,8 +3,8 @@
  * Scroll reveals, dot nav, sound triggers, cursor glow, animated counters.
  */
 
-import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress } from './audio.js?v=9';
-import { initVisuals } from './visuals.js?v=27';
+import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress, setOnAudioDeviceLost, setOnAudioDeviceRecovered } from './audio.js?v=9';
+import { initVisuals } from './visuals.js?v=28';
 
 (function() {
   'use strict';
@@ -274,6 +274,17 @@ import { initVisuals } from './visuals.js?v=27';
   // Track auto-end timers so we can cancel them on manual stop
   const autoEndTimers = new Map();
 
+  function showAudioToast(msg) {
+    const el = document.getElementById('audio-toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.opacity = '1';
+  }
+  function hideAudioToast() {
+    const el = document.getElementById('audio-toast');
+    if (el) el.style.opacity = '0';
+  }
+
   function fadeStop(btn, soundId) {
     if (fadingButtons.has(btn)) return;
     console.log(`[MAIN v3] fadeStop("${soundId}")`);
@@ -455,6 +466,13 @@ import { initVisuals } from './visuals.js?v=27';
           btn.classList.remove('playing');
           return;
         }
+        if (result === 'device-error') {
+          btn.classList.remove('playing');
+          showAudioToast('Audio output lost. Select a working audio device and press play.');
+          console.warn('[MAIN] audio device not responding');
+          return;
+        }
+        hideAudioToast();
         if (soundId === 'hero') scheduleHeroHintCopy();
         if (soundId === 'citizen-science' && paperTitle) paperTitle.classList.add('pulsing');
         // Finite-duration sound: poll audio clock for precise end
@@ -463,6 +481,29 @@ import { initVisuals } from './visuals.js?v=27';
         }
       }
     });
+  });
+
+  // ===== Audio device lost — reset UI so user can click play again =====
+  setOnAudioDeviceLost((lostIds) => {
+    console.log('[MAIN] audio device lost, resetting buttons for:', lostIds);
+    document.querySelectorAll('.sound-trigger.playing').forEach(btn => {
+      btn.classList.remove('playing', 'fading', 'freeze-pulse');
+      btn.style.borderColor = '';
+      btn.style.boxShadow = '';
+      fadingButtons.delete(btn);
+    });
+    if (paperTitle) paperTitle.classList.remove('pulsing');
+    showAudioToast('Audio output lost. Check your sound settings to recover.');
+  });
+
+  // ===== Audio device recovered — restore button state =====
+  setOnAudioDeviceRecovered((replayedIds) => {
+    console.log('[MAIN] audio device recovered, replayed:', replayedIds);
+    hideAudioToast();
+    for (const id of replayedIds) {
+      const btn = document.querySelector(`.sound-trigger[data-target="${id}"], .section[data-sound="${id}"] .sound-trigger`);
+      if (btn) btn.classList.add('playing');
+    }
   });
 
   // ===== Hero "Listen to the solar wind" button RMS shimmer =====
