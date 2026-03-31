@@ -427,7 +427,7 @@ import { initVisuals } from './visuals.js?v=28';
             if (scrollHint.dataset.dismissed === '1') return;
             scrollHint.classList.add('visible');
             delete scrollHint.dataset.pendingReveal;
-            // Show chevron 5s after text appears
+            // Show chevron 7s after text appears
             heroHintPulseTimer = setTimeout(() => {
               heroHintPulseTimer = null;
               if (scrollHint.dataset.dismissed === '1') return;
@@ -437,8 +437,8 @@ import { initVisuals } from './visuals.js?v=28';
                 if (scrollHint.dataset.dismissed === '1') return;
                 scrollHint.classList.add('pulsing');
               }, 3000);
-            }, 5000);
-          }, 4000);
+            }, 7000);
+          }, 3500);
         }
       }
       if (fadingButtons.has(btn)) {

@@ -95,6 +95,10 @@ const HERO_DEBUG_DEFAULTS = {
   pullForce: 0.012,
   friction: 0.98,
   swirlCenter: 'listen',
+  connFadeIn: 0.04,
+  connFadeOut: 0.025,
+  connKillAlpha: 0.02,
+  lineBase: 0.08,
 };
 
 const FORCE_RADIUS = 0.64; // default: 0.6 — fraction of canvas size for audio/swirl force reach
@@ -143,6 +147,9 @@ let HIGH_SPEED = clampHighSpeed(localStorage.getItem('sonara_highSpeed') ?? 1.5)
 let SPEED_CLAMP = clampSpeedClamp(localStorage.getItem('sonara_speedClamp') ?? 1.0);
 let SPEED_PERIOD = clampSpeedPeriod(localStorage.getItem('sonara_speedPeriod') || 80);
 let CONN_KILL_ALPHA = +(localStorage.getItem('sonara_connKillAlpha') || 0.02);
+let CONN_FADE_IN = +(localStorage.getItem('sonara_connFadeIn') || 0.04);
+let CONN_FADE_OUT = +(localStorage.getItem('sonara_connFadeOut') || 0.025);
+let LINE_BASE = +(localStorage.getItem('sonara_lineBase') || 0.08);
 let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
 let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
@@ -196,7 +203,7 @@ function copyText(text) {
 
 // ===== Hero: Audio-reactive particle constellation (WebGL2 + Transform Feedback) =====
 function initHeroCanvas() {
-  const canvas = document.getElementById('hero-canvas');
+  let canvas = document.getElementById('hero-canvas');
   if (!canvas) return;
 
   // ── Physics engine switch ────────────────────────────────────────────
@@ -216,6 +223,36 @@ function initHeroCanvas() {
   let GPU_PARTICLE_STRIDE = 64; // 16 floats per particle (matches struct) — overridden to 40 if f16
   let GPU_OUTPUT_STRIDE = 32;   // 8 floats per output entry — overridden to 24 if f16
   let gpuHasF16 = false;        // set true in initWebGPU() if shader-f16 is available
+
+  // ── WebGPU connection compute state ──────────────────────────────────
+  let gpuConnPool = null, gpuConnHashTable = null;
+  let gpuGridCounts = null, gpuGridOffsets = null, gpuGridIndices = null;
+  let gpuRenderLines = null, gpuConnAtomics = null, gpuConnUniformBuf = null;
+  let gpuNeighborCount = null, gpuLineIndirectBuf = null, gpuConnFreeList = null;
+  // Packed tier buffers (merged when maxStorageBuffersPerShaderStage < 12)
+  let gpuGridData = null;      // gridCounts + gridOffsets
+  let gpuAuxCounters = null;   // connAtomics + lineIndirect
+  let gpuAuxPool = null;       // connFreeList + neighborCount
+  let gpuFlagsExtractBuf = null, gpuFlagsReadBuf = null, gpuRenderUniformBuf = null;
+  let gpuConnPipelines = {};
+  let gpuConnBindGroup = null;
+  let gpuConnBindGroup1 = null;
+  let gpuLineCountReadBuf = null;  // tiny MAP_READ buffer for connection count debug display
+  let gpuLineCount = 0;           // last read line count for debug HUD
+  let gpuConnSearchFrame = 0;
+  const MAX_CONN_SLOTS = 4500;
+  const CONN_HASH_SIZE = 8192;
+  const MAX_GRID_CELLS = 256;
+
+  // ── WebGPU render state ──────────────────────────────────────────────
+  let WEBGPU_RENDER = false;
+  let gpuRenderContext = null;
+  let gpuParticleRenderPipeline = null;
+  let gpuLineRenderPipeline = null;
+  let gpuParticleRenderBindGroup = null;
+  let gpuLineRenderBindGroup = null;
+  let gpuCanvasFormat = null;
+  let gpuResizeScaleX = 1.0, gpuResizeScaleY = 1.0;
 
   // WebGPU slot management (initialized after BUFFER_CAP is defined)
   let gpuWatermark = 0;
@@ -295,6 +332,9 @@ function initHeroCanvas() {
     speedClamp: SPEED_CLAMP,
     speedPeriod: SPEED_PERIOD,
     connKillAlpha: Number(CONN_KILL_ALPHA.toFixed(3)),
+    connFadeIn: Number(CONN_FADE_IN.toFixed(3)),
+    connFadeOut: Number(CONN_FADE_OUT.toFixed(3)),
+    lineBase: Number(LINE_BASE.toFixed(2)),
     fadeUpSecs: FADE_UP_SECS,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
@@ -310,6 +350,7 @@ function initHeroCanvas() {
   const DEBUG_SECOND_ROW_GAP = 12;
   const DEBUG_PAIR_GAP = 4;
   const DEBUG_SELECT_STYLE = `background:#111;color:#00ccff;border:1px solid #00ccff44;font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px`;
+  const DEBUG_CONN_SELECT_STYLE = `background:#111;color:#e4bc58;border:1px solid rgba(228,188,88,0.3);font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px`;
   const DEBUG_COPY_BUTTON_STYLE = `background:#1a1208;color:#c97b2a;border:1px solid rgba(201,123,42,0.45);font:bold 16px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 11ch;width:11ch;text-align:center;white-space:nowrap`;
   const DEBUG_TOGGLE_BUTTON_STYLE = `position:fixed;top:12px;right:12px;z-index:10000;background:rgba(10,10,12,0.1);color:rgba(228,188,88,0.4);border:1px solid rgba(228,188,88,0.09);font:bold 14px monospace;padding:2px ${DEBUG_HUD_PAD_X}px;cursor:pointer;text-transform:lowercase;box-shadow:0 0 6px rgba(228,188,88,0.025)`;
   const DEBUG_HUD_VISIBLE_KEY = 'sonara_debugHudVisible';
@@ -335,11 +376,14 @@ function initHeroCanvas() {
   debugThirdRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   const debugConnCountEl = document.createElement('span');
   debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:18ch;width:18ch;text-align:right;white-space:nowrap';
+  const debugConnRow = document.createElement('div');
+  debugConnRow.style.cssText = `display:flex;align-items:center;gap:${DEBUG_SECOND_ROW_GAP}px`;
   const debugPerfRow = document.createElement('div');
   debugPerfRow.style.cssText = 'display:flex;align-items:center;gap:8px';
   debugBar.appendChild(debugTopRow);
   debugBar.appendChild(debugSecondRow);
   debugBar.appendChild(debugThirdRow);
+  debugBar.appendChild(debugConnRow);
   debugBar.appendChild(debugPerfRow);
   const debugToggleBtn = document.createElement('button');
   debugToggleBtn.type = 'button';
@@ -505,7 +549,7 @@ function initHeroCanvas() {
     appendDebugPair(debugSecondRow, 'Spin rel:', srSel);
 
     const sel = document.createElement('select');
-    sel.style.cssText = DEBUG_SELECT_STYLE;
+    sel.style.cssText = DEBUG_CONN_SELECT_STYLE;
     for (let i = 1; i <= 30; i++) {
       const opt = document.createElement('option');
       opt.value = i;
@@ -514,7 +558,6 @@ function initHeroCanvas() {
       sel.appendChild(opt);
     }
     sel.addEventListener('change', () => { CONN_SEARCH_INTERVAL = +sel.value; connSearchFrame = 0; localStorage.setItem('sonara_connSkip', CONN_SEARCH_INTERVAL); });
-    appendDebugPair(debugTopRow, 'Conn skip:', sel);
 
     const wpSel = document.createElement('select');
     wpSel.style.cssText = DEBUG_SELECT_STYLE;
@@ -545,7 +588,37 @@ function initHeroCanvas() {
       localStorage.setItem('sonara_whiteBrightnessCap', WHITE_BRIGHTNESS_CAP);
     });
     debugConnCountEl.textContent = 'Active conn: 0';
-    debugThirdRow.appendChild(debugConnCountEl);
+    debugConnCountEl.style.cssText = 'pointer-events:none;display:inline-block;min-width:18ch;width:18ch;text-align:right;white-space:nowrap;color:#e4bc58';
+    debugConnRow.appendChild(debugConnCountEl);
+    const connSkipPair = appendDebugPair(debugConnRow, 'Skip:', sel);
+    connSkipPair.firstChild.style.color = '#e4bc58';
+
+    const cSel = document.createElement('select');
+    cSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
+    for (let i = 1; i <= 5; i++) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${i}${i === HERO_DEBUG_DEFAULTS.maxConn ? ' ★' : ''}`;
+      if (i === MAX_CONN) opt.selected = true;
+      cSel.appendChild(opt);
+    }
+    cSel.addEventListener('change', () => { MAX_CONN = +cSel.value; localStorage.setItem('sonara_maxConn', MAX_CONN); });
+    const connPair = appendDebugPair(debugConnRow, 'Conn:', cSel);
+    connPair.firstChild.style.color = '#e4bc58';
+
+    const dSel = document.createElement('select');
+    dSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
+    for (let i = 100; i <= 200; i += 10) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${i}px${i === HERO_DEBUG_DEFAULTS.connDist ? ' ★' : ''}`;
+      if (i === CONN_REACH) opt.selected = true;
+      dSel.appendChild(opt);
+    }
+    dSel.addEventListener('change', () => { updateConnReach(+dSel.value); localStorage.setItem('sonara_connDist', CONN_REACH); });
+    const distPair = appendDebugPair(debugConnRow, 'Dist:', dSel);
+    distPair.firstChild.style.color = '#e4bc58';
+
     appendDebugPair(debugThirdRow, 'White %:', wpSel);
     appendDebugPair(debugThirdRow, 'White cap:', wcSel);
 
@@ -632,11 +705,11 @@ function initHeroCanvas() {
     speedClampPair.firstChild.style.color = debugGold;
 
     const ckSel = document.createElement('select');
-    ckSel.style.cssText = `${DEBUG_SELECT_STYLE};color:#c084fc`;
+    ckSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
     for (const v of [0.003, 0.01, 0.02, 0.03, 0.05, 0.08, 0.1]) {
       const opt = document.createElement('option');
       opt.value = String(v);
-      opt.textContent = `${v}${Math.abs(v - 0.01) < 0.0001 ? ' ★' : ''}`;
+      opt.textContent = `${v}${Math.abs(v - HERO_DEBUG_DEFAULTS.connKillAlpha) < 0.0001 ? ' ★' : ''}`;
       if (Math.abs(v - CONN_KILL_ALPHA) < 0.0001) opt.selected = true;
       ckSel.appendChild(opt);
     }
@@ -644,8 +717,53 @@ function initHeroCanvas() {
       CONN_KILL_ALPHA = +ckSel.value;
       localStorage.setItem('sonara_connKillAlpha', String(CONN_KILL_ALPHA));
     });
-    const connKillPair = appendDebugPair(debugThirdRow, 'Kill α:', ckSel);
-    connKillPair.firstChild.style.color = '#c084fc';
+    const connKillPair = appendDebugPair(debugConnRow, 'Kill:', ckSel);
+    connKillPair.firstChild.style.color = '#e4bc58';
+
+    // Line weight (LINE_BASE)
+    const lwSel = document.createElement('select');
+    lwSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
+    for (let i = 1; i <= 20; i++) {
+      const v = i / 100;
+      const opt = document.createElement('option');
+      opt.value = v.toFixed(2);
+      opt.textContent = `${v.toFixed(2)}${Math.abs(v - HERO_DEBUG_DEFAULTS.lineBase) < 0.001 ? ' ★' : ''}`;
+      if (Math.abs(v - LINE_BASE) < 0.001) opt.selected = true;
+      lwSel.appendChild(opt);
+    }
+    lwSel.addEventListener('change', () => { LINE_BASE = +lwSel.value; localStorage.setItem('sonara_lineBase', LINE_BASE); });
+    const lwPair = appendDebugPair(debugConnRow, 'Weight:', lwSel);
+    lwPair.firstChild.style.color = '#e4bc58';
+
+    // Fade in rate
+    const fiSel = document.createElement('select');
+    fiSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
+    for (let i = 1; i <= 20; i++) {
+      const v = i / 100;
+      const opt = document.createElement('option');
+      opt.value = v.toFixed(2);
+      opt.textContent = `${(v * 100).toFixed(0)}%${Math.abs(v - HERO_DEBUG_DEFAULTS.connFadeIn) < 0.001 ? ' ★' : ''}`;
+      if (Math.abs(v - CONN_FADE_IN) < 0.001) opt.selected = true;
+      fiSel.appendChild(opt);
+    }
+    fiSel.addEventListener('change', () => { CONN_FADE_IN = +fiSel.value; localStorage.setItem('sonara_connFadeIn', CONN_FADE_IN); });
+    const fiPair = appendDebugPair(debugConnRow, 'FadeIn:', fiSel);
+    fiPair.firstChild.style.color = '#e4bc58';
+
+    // Fade out rate
+    const foSel = document.createElement('select');
+    foSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
+    for (let i = 5; i <= 100; i += 5) {
+      const v = i / 1000;
+      const opt = document.createElement('option');
+      opt.value = v.toFixed(3);
+      opt.textContent = `${v.toFixed(3)}${Math.abs(v - HERO_DEBUG_DEFAULTS.connFadeOut) < 0.001 ? ' ★' : ''}`;
+      if (Math.abs(v - CONN_FADE_OUT) < 0.001) opt.selected = true;
+      foSel.appendChild(opt);
+    }
+    foSel.addEventListener('change', () => { CONN_FADE_OUT = +foSel.value; localStorage.setItem('sonara_connFadeOut', CONN_FADE_OUT); });
+    const foPair = appendDebugPair(debugConnRow, 'FadeOut:', foSel);
+    foPair.firstChild.style.color = '#e4bc58';
 
     const ffSel = document.createElement('select');
     ffSel.style.cssText = `${DEBUG_SELECT_STYLE};color:#c084fc`;
@@ -695,6 +813,46 @@ function initHeroCanvas() {
     localStorage.setItem('sonara_f16', f16Check.checked ? '1' : '0');
     location.reload();
   });
+
+  // GPU Render toggle (local only) — disables WebGPU render path for A/B comparison
+  // Each mode has its own full set of settings so you can tune independently
+  const GPU_RENDER_EXCLUDE = ['sonara_gpu_render', 'sonara_f16', 'sonara_debugHudVisible'];
+  if (isLocal) {
+    const gpuRenderLabel = document.createElement('label');
+    gpuRenderLabel.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;color:#60a5fa;white-space:nowrap';
+    const gpuRenderCheck = document.createElement('input');
+    gpuRenderCheck.type = 'checkbox';
+    gpuRenderCheck.checked = localStorage.getItem('sonara_gpu_render') !== '0'; // default on
+    gpuRenderCheck.style.cssText = 'margin:0;cursor:pointer';
+    gpuRenderLabel.appendChild(gpuRenderCheck);
+    gpuRenderLabel.appendChild(document.createTextNode('GPURender'));
+    debugPerfRow.appendChild(gpuRenderLabel);
+    gpuRenderCheck.addEventListener('change', () => {
+      const wasGpu = !gpuRenderCheck.checked;
+      const fromPrefix = wasGpu ? 'sonara_gpu__' : 'sonara_cpu__';
+      const toPrefix = wasGpu ? 'sonara_cpu__' : 'sonara_gpu__';
+      // Collect all active sonara_ keys (excluding toggle keys)
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k.startsWith('sonara_') && !k.startsWith('sonara_gpu__') && !k.startsWith('sonara_cpu__')
+            && !GPU_RENDER_EXCLUDE.includes(k)) {
+          keys.push(k);
+        }
+      }
+      // Save current values under the outgoing mode prefix
+      for (const k of keys) {
+        localStorage.setItem(fromPrefix + k.slice(7), localStorage.getItem(k));
+      }
+      // Restore saved values from the incoming mode prefix
+      for (const k of keys) {
+        const saved = localStorage.getItem(toPrefix + k.slice(7));
+        if (saved != null) localStorage.setItem(k, saved);
+      }
+      localStorage.setItem('sonara_gpu_render', gpuRenderCheck.checked ? '1' : '0');
+      location.reload();
+    });
+  }
 
   let ftSmooth = 0;
 
@@ -770,32 +928,8 @@ function initHeroCanvas() {
   counterEl.appendChild(highWaterEl);
   debugTopRow.appendChild(counterEl);
 
-  // Connection tuning dropdowns (right of T)
+  // Connection tuning dropdowns (top row: physics controls)
   if (isLocal) {
-    const cSel = document.createElement('select');
-    cSel.style.cssText = DEBUG_SELECT_STYLE;
-    for (let i = 1; i <= 5; i++) {
-      const opt = document.createElement('option');
-      opt.value = i;
-      opt.textContent = `${i}${i === HERO_DEBUG_DEFAULTS.maxConn ? ' ★' : ''}`;
-      if (i === MAX_CONN) opt.selected = true;
-      cSel.appendChild(opt);
-    }
-    cSel.addEventListener('change', () => { MAX_CONN = +cSel.value; localStorage.setItem('sonara_maxConn', MAX_CONN); });
-    appendDebugPair(debugTopRow, 'Conn:', cSel);
-
-    const dSel = document.createElement('select');
-    dSel.style.cssText = DEBUG_SELECT_STYLE;
-    for (let i = 100; i <= 200; i += 10) {
-      const opt = document.createElement('option');
-      opt.value = i;
-      opt.textContent = `${i}px${i === HERO_DEBUG_DEFAULTS.connDist ? ' ★' : ''}`;
-      if (i === CONN_REACH) opt.selected = true;
-      dSel.appendChild(opt);
-    }
-    dSel.addEventListener('change', () => { updateConnReach(+dSel.value); localStorage.setItem('sonara_connDist', CONN_REACH); });
-    appendDebugPair(debugTopRow, 'Dist:', dSel);
-
     const sSel = document.createElement('select');
     sSel.style.cssText = DEBUG_SELECT_STYLE;
     for (let i = 0; i <= 100; i += 5) {
@@ -878,7 +1012,7 @@ function initHeroCanvas() {
         copyBtn.disabled = false;
       }, 1200);
     });
-    debugPerfRow.appendChild(copyBtn);
+    debugConnRow.appendChild(copyBtn);
   }
   if (isLocal) {
     canvas.parentElement.appendChild(debugBar);
@@ -943,6 +1077,8 @@ function initHeroCanvas() {
   let rmsSmooth = 0;
   let lastRippleTime = 0;
   let rippleClickTime = 0;
+  let radiusFadeOpacity = 0;
+  let radiusLocked = false;
   const RIPPLE_BURST_DURATION = 10000;
   let rippleFirstPlay = true;
 
@@ -1452,8 +1588,6 @@ function initHeroCanvas() {
   const connFade = new Map();
   const grid = new Map();
   const framePairs = new Set();
-  const CONN_FADE_IN = 0.04;
-  const CONN_FADE_OUT = 0.025;
   let connSearchFrame = 0;
   let neighborCount = new Uint8Array(BUFFER_CAP);
 
@@ -1491,7 +1625,7 @@ struct Uniforms {
   heroBrightness: f32,
   seed: f32,
   particleCount: u32,
-  _pad1: u32, _pad2: u32, _pad3: u32, _pad4: u32, _pad5: u32,
+  scaleX: f32, scaleY: f32, _pad3: u32, _pad4: u32, _pad5: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -1510,6 +1644,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (i >= u.particleCount) { return; }
 
   var p = particles[i];
+
+  // Apply resize scale (1.0 normally, != 1.0 on the frame after a resize)
+  if (u.scaleX != 1.0 || u.scaleY != 1.0) {
+    p.x *= u.scaleX;
+    p.y *= u.scaleY;
+    particles[i].x = p.x;
+    particles[i].y = p.y;
+  }
 
   // Dead particle — pass through
   if (p.life < -900.0) {
@@ -1677,7 +1819,7 @@ struct Uniforms {
   heroBrightness: f32,
   seed: f32,
   particleCount: u32,
-  _pad1: u32, _pad2: u32, _pad3: u32, _pad4: u32, _pad5: u32,
+  scaleX: f32, scaleY: f32, _pad3: u32, _pad4: u32, _pad5: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -1696,6 +1838,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (i >= u.particleCount) { return; }
 
   var p = particles[i];
+
+  // Apply resize scale (1.0 normally, != 1.0 on the frame after a resize)
+  if (u.scaleX != 1.0 || u.scaleY != 1.0) {
+    p.x *= u.scaleX;
+    p.y *= u.scaleY;
+    particles[i].x = p.x;
+    particles[i].y = p.y;
+  }
 
   // Promote f16 fields to f32 for math
   var vx = f32(p.vx);
@@ -1849,6 +1999,907 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+  // ── Connection compute shader (grid + search + fade) ─────────────────
+  function makeConnWGSL(hasF16, packed) {
+    const pOutStruct = hasF16 ? `
+struct POut {
+  x: f32, y: f32,
+  vx: f16, vy: f16,
+  size: f16, alpha_out: f16,
+  pid: u32, flags: u32,
+};` : `
+struct POut {
+  x: f32, y: f32, vx: f32, vy: f32,
+  size: f32, alpha_out: f32,
+  pid: u32, flags: u32,
+};`;
+
+    // ── Packed tier: 8 storage + 1 uniform in single bind group ──────
+    // gridData = gridCounts[0..255] + gridOffsets[256..511]
+    // auxCounters = connAtomics[0..1] + lineIndirect[2..5]
+    // auxPool = connFreeList[0..MAX_CONN_SLOTS-1] + neighborCount[MAX_CONN_SLOTS..]
+    if (packed) {
+      return `${hasF16 ? 'enable f16;\n' : ''}
+${pOutStruct}
+
+struct Connection {
+  pidA: u32, pidB: u32,
+  alpha: f32, tgt: f32,
+  idxA: u32, idxB: u32,
+  state: u32, _pad: u32,
+  frozenAx: f32, frozenAy: f32,
+  frozenBx: f32, frozenBy: f32,
+};
+
+struct ConnUniforms {
+  connReachSq: f32,
+  connFadeStartSq: f32,
+  connBucketDiv: f32,
+  maxConn: u32,
+  connFadeIn: f32,
+  connFadeOut: f32,
+  connKillAlpha: f32,
+  doSearch: u32,
+  lineIntensity: f32,
+  heroBrightness: f32,
+  gridCols: u32,
+  gridRows: u32,
+  cellSize: f32,
+  particleCount: u32,
+  maxConnSlots: u32,
+  lineBase: f32,
+};
+
+@group(0) @binding(0) var<storage, read> pOut: array<POut>;
+@group(0) @binding(1) var<storage, read_write> connPool: array<Connection>;
+@group(0) @binding(2) var<storage, read_write> hashTable: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> gridData: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> gridIndices: array<u32>;
+@group(0) @binding(5) var<storage, read_write> renderLines: array<${hasF16 ? 'f16' : 'f32'}>;
+@group(0) @binding(6) var<storage, read_write> auxCounters: array<atomic<u32>>;
+@group(0) @binding(7) var<uniform> cu: ConnUniforms;
+@group(0) @binding(8) var<storage, read_write> auxPool: array<atomic<u32>>;
+
+const GRID_OFF: u32 = ${MAX_GRID_CELLS}u; // gridOffsets start at gridData[256]
+const NCNT_OFF: u32 = ${MAX_CONN_SLOTS}u; // neighborCount starts at auxPool[4500]
+const HASH_SIZE: u32 = 8192u;
+const HASH_MASK: u32 = 8191u;
+const EMPTY: u32 = 0xFFFFFFFFu;
+const MAX_PROBE: u32 = 32u;
+
+fn hashKey(pidA: u32, pidB: u32) -> u32 {
+  let lo = min(pidA, pidB);
+  let hi = max(pidA, pidB);
+  let key = lo * 65536u + hi;
+  var h = key;
+  h ^= h >> 16u;
+  h *= 0x45d9f3bu;
+  h ^= h >> 16u;
+  return h & HASH_MASK;
+}
+
+fn canonKey(pidA: u32, pidB: u32) -> u32 {
+  return min(pidA, pidB) * 65536u + max(pidA, pidB);
+}
+
+fn cellKey(x: f32, y: f32) -> u32 {
+  let cx = u32(max(0.0, x) / cu.cellSize);
+  let cy = u32(max(0.0, y) / cu.cellSize);
+  let cxc = min(cx, cu.gridCols - 1u);
+  let cyc = min(cy, cu.gridRows - 1u);
+  return cxc + cyc * cu.gridCols;
+}
+
+@compute @workgroup_size(256)
+fn gridClear(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i < ${MAX_GRID_CELLS}u) {
+    atomicStore(&gridData[i], 0u);
+    atomicStore(&gridData[i + GRID_OFF], 0u);
+  }
+  if (i < cu.particleCount) {
+    atomicStore(&auxPool[i + NCNT_OFF], 0u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn gridCount(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flags = pOut[i].flags;
+  if ((flags & 1u) != 0u) { return; }
+  let ck = cellKey(pOut[i].x, pOut[i].y);
+  atomicAdd(&gridData[ck], 1u);
+}
+
+var<workgroup> prefixShared: array<u32, 256>;
+
+@compute @workgroup_size(256)
+fn gridPrefixSum(@builtin(local_invocation_id) lid: vec3u) {
+  let i = lid.x;
+  prefixShared[i] = select(0u, atomicLoad(&gridData[i]), i < ${MAX_GRID_CELLS}u);
+  workgroupBarrier();
+
+  for (var stride = 1u; stride < 256u; stride <<= 1u) {
+    var val = 0u;
+    if (i >= stride) {
+      val = prefixShared[i - stride];
+    }
+    workgroupBarrier();
+    prefixShared[i] += val;
+    workgroupBarrier();
+  }
+
+  if (i < ${MAX_GRID_CELLS}u) {
+    atomicStore(&gridData[i + GRID_OFF], select(0u, prefixShared[i - 1u], i > 0u));
+    atomicStore(&gridData[i], 0u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn gridScatter(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flags = pOut[i].flags;
+  if ((flags & 1u) != 0u) { return; }
+  let ck = cellKey(pOut[i].x, pOut[i].y);
+  let slot = atomicLoad(&gridData[ck + GRID_OFF]) + atomicAdd(&gridData[ck], 1u);
+  gridIndices[slot] = i;
+}
+
+@compute @workgroup_size(256)
+fn buildFreeList(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.maxConnSlots) { return; }
+  if (connPool[i].state == 0u) {
+    let idx = atomicAdd(&auxCounters[1], 1u);
+    atomicStore(&auxPool[idx], i);
+  }
+}
+
+@compute @workgroup_size(256)
+fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flagsI = pOut[i].flags;
+  if ((flagsI & 1u) != 0u) { return; }
+  let xi = pOut[i].x;
+  let yi = pOut[i].y;
+  let pidI = pOut[i].pid;
+  let isBurstI = (flagsI & 2u) != 0u;
+  let cxi = u32(max(0.0, xi) / cu.cellSize);
+  let cyi = u32(max(0.0, yi) / cu.cellSize);
+
+  let aiBrightBoost = 1.0 + cu.lineIntensity * 2.0;
+
+  for (var dy: i32 = -1; dy <= 1; dy++) {
+    for (var dx: i32 = -1; dx <= 1; dx++) {
+      let nx = i32(cxi) + dx;
+      let ny = i32(cyi) + dy;
+      if (nx < 0 || ny < 0 || u32(nx) >= cu.gridCols || u32(ny) >= cu.gridRows) { continue; }
+      let nk = u32(nx) + u32(ny) * cu.gridCols;
+      let cellStart = atomicLoad(&gridData[nk + GRID_OFF]);
+      let cellEnd = cellStart + atomicLoad(&gridData[nk]);
+      for (var jj = cellStart; jj < cellEnd; jj++) {
+        let j = gridIndices[jj];
+        if (j <= i) { continue; }
+        let flagsJ = pOut[j].flags;
+        if ((flagsJ & 1u) != 0u) { continue; }
+        if (isBurstI && (flagsJ & 2u) != 0u) { continue; }
+        if (atomicLoad(&auxPool[i + NCNT_OFF]) >= cu.maxConn || atomicLoad(&auxPool[j + NCNT_OFF]) >= cu.maxConn) { continue; }
+        let ddx = xi - pOut[j].x;
+        let ddy = yi - pOut[j].y;
+        let d2 = ddx * ddx + ddy * ddy;
+        if (d2 >= cu.connReachSq) { continue; }
+
+        let bucket = min(u32(d2 / cu.connBucketDiv), 4u);
+        let bucketMult = array<f32, 5>(1.0, 0.8, 0.6, 0.4, 0.2);
+        let edgeFade = select(1.0 - (d2 - cu.connFadeStartSq) / (cu.connReachSq - cu.connFadeStartSq), 1.0, d2 < cu.connFadeStartSq);
+        let targetAlpha = cu.lineBase * bucketMult[bucket] * edgeFade * aiBrightBoost * cu.heroBrightness;
+
+        let pidJ = pOut[j].pid;
+        let ck = canonKey(pidI, pidJ);
+        let h = hashKey(pidI, pidJ);
+
+        var found = false;
+        for (var probe = 0u; probe < MAX_PROBE; probe++) {
+          let slot = (h + probe) & HASH_MASK;
+          let stored = atomicLoad(&hashTable[slot * 2u]);
+          if (stored == ck) {
+            let poolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
+            connPool[poolIdx].tgt = targetAlpha;
+            connPool[poolIdx].idxA = select(j, i, pidI < pidJ);
+            connPool[poolIdx].idxB = select(i, j, pidI < pidJ);
+            connPool[poolIdx].state = 3u;
+            found = true;
+            break;
+          }
+          if (stored == EMPTY) { break; }
+        }
+
+        if (!found) {
+          let freeIdx = atomicSub(&auxCounters[1], 1u);
+          if (freeIdx == 0u || freeIdx > cu.maxConnSlots) {
+            atomicAdd(&auxCounters[1], 1u);
+            continue;
+          }
+          let poolSlot = atomicLoad(&auxPool[freeIdx - 1u]);
+
+          connPool[poolSlot].pidA = min(pidI, pidJ);
+          connPool[poolSlot].pidB = max(pidI, pidJ);
+          connPool[poolSlot].alpha = 0.0;
+          connPool[poolSlot].tgt = targetAlpha;
+          connPool[poolSlot].idxA = select(j, i, pidI < pidJ);
+          connPool[poolSlot].idxB = select(i, j, pidI < pidJ);
+          connPool[poolSlot].state = 3u;
+          connPool[poolSlot]._pad = 0u;
+          connPool[poolSlot].frozenAx = 0.0;
+          connPool[poolSlot].frozenAy = 0.0;
+          connPool[poolSlot].frozenBx = 0.0;
+          connPool[poolSlot].frozenBy = 0.0;
+
+          for (var probe = 0u; probe < MAX_PROBE; probe++) {
+            let slot = (h + probe) & HASH_MASK;
+            let old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+            if (old.exchanged) {
+              atomicStore(&hashTable[slot * 2u + 1u], poolSlot);
+              break;
+            }
+            if (old.old_value == ck) {
+              connPool[poolSlot].state = 0u;
+              let existPoolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
+              connPool[existPoolIdx].tgt = targetAlpha;
+              connPool[existPoolIdx].state = 3u;
+              break;
+            }
+          }
+        }
+
+        atomicAdd(&auxPool[i + NCNT_OFF], 1u);
+        atomicAdd(&auxPool[j + NCNT_OFF], 1u);
+      }
+    }
+  }
+}
+
+@compute @workgroup_size(256)
+fn connFade(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.maxConnSlots) { return; }
+  var c = connPool[i];
+  if (c.state == 0u) { return; }
+
+  if (cu.doSearch == 1u && c.state == 1u) {
+    c.tgt = 0.0;
+  }
+  if (c.state == 3u) {
+    c.state = 1u;
+  }
+
+  if (c.state == 1u) {
+    let flagsA = pOut[c.idxA].flags;
+    let flagsB = pOut[c.idxB].flags;
+    let deadA = (flagsA & 1u) != 0u;
+    let deadB = (flagsB & 1u) != 0u;
+    let wrappedA = (flagsA & 8u) != 0u;
+    let wrappedB = (flagsB & 8u) != 0u;
+
+    if (wrappedA || wrappedB) {
+      let ck = canonKey(c.pidA, c.pidB);
+      let h = hashKey(c.pidA, c.pidB);
+      for (var probe = 0u; probe < MAX_PROBE; probe++) {
+        let slot = (h + probe) & HASH_MASK;
+        let stored = atomicLoad(&hashTable[slot * 2u]);
+        if (stored == ck) {
+          atomicStore(&hashTable[slot * 2u], EMPTY);
+          break;
+        }
+        if (stored == EMPTY) { break; }
+      }
+      c.state = 0u;
+      connPool[i] = c;
+      return;
+    }
+
+    if (deadA || deadB) {
+      c.frozenAx = pOut[c.idxA].x;
+      c.frozenAy = pOut[c.idxA].y;
+      c.frozenBx = pOut[c.idxB].x;
+      c.frozenBy = pOut[c.idxB].y;
+      c.state = 2u;
+      c.tgt = 0.0;
+    }
+  }
+
+  let rate = select(cu.connFadeOut, cu.connFadeIn, c.tgt > c.alpha);
+  c.alpha += (c.tgt - c.alpha) * rate;
+
+  if (c.alpha < cu.connKillAlpha && c.tgt == 0.0) {
+    let ck = canonKey(c.pidA, c.pidB);
+    let h = hashKey(c.pidA, c.pidB);
+    for (var probe = 0u; probe < MAX_PROBE; probe++) {
+      let slot = (h + probe) & HASH_MASK;
+      let stored = atomicLoad(&hashTable[slot * 2u]);
+      if (stored == ck) {
+        atomicStore(&hashTable[slot * 2u], EMPTY);
+        break;
+      }
+      if (stored == EMPTY) { break; }
+    }
+    c.state = 0u;
+    connPool[i] = c;
+    return;
+  }
+
+  var ax: f32; var ay: f32; var bx: f32; var by: f32;
+  if (c.state == 2u) {
+    ax = c.frozenAx; ay = c.frozenAy;
+    bx = c.frozenBx; by = c.frozenBy;
+  } else {
+    ax = pOut[c.idxA].x; ay = pOut[c.idxA].y;
+    bx = pOut[c.idxB].x; by = pOut[c.idxB].y;
+  }
+
+  let lineIdx = atomicAdd(&auxCounters[0], 1u);
+  let off = lineIdx * 6u;
+  renderLines[off + 0u] = ${hasF16 ? 'f16(ax)' : 'ax'};
+  renderLines[off + 1u] = ${hasF16 ? 'f16(ay)' : 'ay'};
+  renderLines[off + 2u] = ${hasF16 ? 'f16(c.alpha)' : 'c.alpha'};
+  renderLines[off + 3u] = ${hasF16 ? 'f16(bx)' : 'bx'};
+  renderLines[off + 4u] = ${hasF16 ? 'f16(by)' : 'by'};
+  renderLines[off + 5u] = ${hasF16 ? 'f16(c.alpha)' : 'c.alpha'};
+
+  connPool[i] = c;
+}
+
+@compute @workgroup_size(1)
+fn writeIndirect() {
+  let lineCount = atomicLoad(&auxCounters[0]);
+  atomicStore(&auxCounters[2], lineCount * 2u); // vertex count
+  atomicStore(&auxCounters[3], 1u);             // instance count
+  atomicStore(&auxCounters[4], 0u);             // first vertex
+  atomicStore(&auxCounters[5], 0u);             // first instance
+}
+
+`;
+    }
+
+    // ── Enhanced tier: unpacked, 11 storage + 1 uniform across 2 groups ──
+    return `${hasF16 ? 'enable f16;\n' : ''}
+${pOutStruct}
+
+struct Connection {
+  pidA: u32, pidB: u32,
+  alpha: f32, tgt: f32,
+  idxA: u32, idxB: u32,
+  state: u32, _pad: u32,
+  frozenAx: f32, frozenAy: f32,
+  frozenBx: f32, frozenBy: f32,
+};
+
+struct ConnUniforms {
+  connReachSq: f32,
+  connFadeStartSq: f32,
+  connBucketDiv: f32,
+  maxConn: u32,
+  connFadeIn: f32,
+  connFadeOut: f32,
+  connKillAlpha: f32,
+  doSearch: u32,
+  lineIntensity: f32,
+  heroBrightness: f32,
+  gridCols: u32,
+  gridRows: u32,
+  cellSize: f32,
+  particleCount: u32,
+  maxConnSlots: u32,
+  lineBase: f32,
+};
+
+@group(0) @binding(0) var<storage, read> pOut: array<POut>;
+@group(0) @binding(1) var<storage, read_write> connPool: array<Connection>;
+@group(0) @binding(2) var<storage, read_write> hashTable: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> gridCounts: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> gridOffsets: array<u32>;
+@group(0) @binding(5) var<storage, read_write> gridIndices: array<u32>;
+@group(0) @binding(6) var<storage, read_write> connAtomics: array<atomic<u32>>;
+@group(0) @binding(7) var<uniform> cu: ConnUniforms;
+@group(1) @binding(0) var<storage, read_write> renderLines: array<${hasF16 ? 'f16' : 'f32'}>;
+@group(1) @binding(1) var<storage, read_write> neighborCount: array<atomic<u32>>;
+@group(1) @binding(2) var<storage, read_write> lineIndirect: array<u32>;
+@group(1) @binding(3) var<storage, read_write> connFreeList: array<u32>;
+
+const HASH_SIZE: u32 = 8192u;
+const HASH_MASK: u32 = 8191u;
+const EMPTY: u32 = 0xFFFFFFFFu;
+const MAX_PROBE: u32 = 32u;
+
+fn hashKey(pidA: u32, pidB: u32) -> u32 {
+  let lo = min(pidA, pidB);
+  let hi = max(pidA, pidB);
+  let key = lo * 65536u + hi;
+  var h = key;
+  h ^= h >> 16u;
+  h *= 0x45d9f3bu;
+  h ^= h >> 16u;
+  return h & HASH_MASK;
+}
+
+fn canonKey(pidA: u32, pidB: u32) -> u32 {
+  return min(pidA, pidB) * 65536u + max(pidA, pidB);
+}
+
+fn cellKey(x: f32, y: f32) -> u32 {
+  let cx = u32(max(0.0, x) / cu.cellSize);
+  let cy = u32(max(0.0, y) / cu.cellSize);
+  let cxc = min(cx, cu.gridCols - 1u);
+  let cyc = min(cy, cu.gridRows - 1u);
+  return cxc + cyc * cu.gridCols;
+}
+
+@compute @workgroup_size(256)
+fn gridClear(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i < ${MAX_GRID_CELLS}u) {
+    atomicStore(&gridCounts[i], 0u);
+    gridOffsets[i] = 0u;
+  }
+  if (i < cu.particleCount) {
+    atomicStore(&neighborCount[i], 0u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn gridCount(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flags = pOut[i].flags;
+  if ((flags & 1u) != 0u) { return; }
+  let ck = cellKey(pOut[i].x, pOut[i].y);
+  atomicAdd(&gridCounts[ck], 1u);
+}
+
+var<workgroup> prefixShared: array<u32, 256>;
+
+@compute @workgroup_size(256)
+fn gridPrefixSum(@builtin(local_invocation_id) lid: vec3u) {
+  let i = lid.x;
+  prefixShared[i] = select(0u, atomicLoad(&gridCounts[i]), i < ${MAX_GRID_CELLS}u);
+  workgroupBarrier();
+
+  for (var stride = 1u; stride < 256u; stride <<= 1u) {
+    var val = 0u;
+    if (i >= stride) {
+      val = prefixShared[i - stride];
+    }
+    workgroupBarrier();
+    prefixShared[i] += val;
+    workgroupBarrier();
+  }
+
+  if (i < ${MAX_GRID_CELLS}u) {
+    gridOffsets[i] = select(0u, prefixShared[i - 1u], i > 0u);
+    atomicStore(&gridCounts[i], 0u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn gridScatter(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flags = pOut[i].flags;
+  if ((flags & 1u) != 0u) { return; }
+  let ck = cellKey(pOut[i].x, pOut[i].y);
+  let slot = gridOffsets[ck] + atomicAdd(&gridCounts[ck], 1u);
+  gridIndices[slot] = i;
+}
+
+@compute @workgroup_size(256)
+fn buildFreeList(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.maxConnSlots) { return; }
+  if (connPool[i].state == 0u) {
+    let idx = atomicAdd(&connAtomics[1], 1u);
+    connFreeList[idx] = i;
+  }
+}
+
+@compute @workgroup_size(256)
+fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.particleCount) { return; }
+  let flagsI = pOut[i].flags;
+  if ((flagsI & 1u) != 0u) { return; }
+  let xi = pOut[i].x;
+  let yi = pOut[i].y;
+  let pidI = pOut[i].pid;
+  let isBurstI = (flagsI & 2u) != 0u;
+  let cxi = u32(max(0.0, xi) / cu.cellSize);
+  let cyi = u32(max(0.0, yi) / cu.cellSize);
+
+  let aiBrightBoost = 1.0 + cu.lineIntensity * 2.0;
+
+  for (var dy: i32 = -1; dy <= 1; dy++) {
+    for (var dx: i32 = -1; dx <= 1; dx++) {
+      let nx = i32(cxi) + dx;
+      let ny = i32(cyi) + dy;
+      if (nx < 0 || ny < 0 || u32(nx) >= cu.gridCols || u32(ny) >= cu.gridRows) { continue; }
+      let nk = u32(nx) + u32(ny) * cu.gridCols;
+      let cellStart = gridOffsets[nk];
+      let cellEnd = cellStart + atomicLoad(&gridCounts[nk]);
+      for (var jj = cellStart; jj < cellEnd; jj++) {
+        let j = gridIndices[jj];
+        if (j <= i) { continue; }
+        let flagsJ = pOut[j].flags;
+        if ((flagsJ & 1u) != 0u) { continue; }
+        if (isBurstI && (flagsJ & 2u) != 0u) { continue; }
+        if (atomicLoad(&neighborCount[i]) >= cu.maxConn || atomicLoad(&neighborCount[j]) >= cu.maxConn) { continue; }
+        let ddx = xi - pOut[j].x;
+        let ddy = yi - pOut[j].y;
+        let d2 = ddx * ddx + ddy * ddy;
+        if (d2 >= cu.connReachSq) { continue; }
+
+        let bucket = min(u32(d2 / cu.connBucketDiv), 4u);
+        let bucketMult = array<f32, 5>(1.0, 0.8, 0.6, 0.4, 0.2);
+        let edgeFade = select(1.0 - (d2 - cu.connFadeStartSq) / (cu.connReachSq - cu.connFadeStartSq), 1.0, d2 < cu.connFadeStartSq);
+        let targetAlpha = cu.lineBase * bucketMult[bucket] * edgeFade * aiBrightBoost * cu.heroBrightness;
+
+        let pidJ = pOut[j].pid;
+        let ck = canonKey(pidI, pidJ);
+        let h = hashKey(pidI, pidJ);
+
+        var found = false;
+        for (var probe = 0u; probe < MAX_PROBE; probe++) {
+          let slot = (h + probe) & HASH_MASK;
+          let stored = atomicLoad(&hashTable[slot * 2u]);
+          if (stored == ck) {
+            let poolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
+            connPool[poolIdx].tgt = targetAlpha;
+            connPool[poolIdx].idxA = select(j, i, pidI < pidJ);
+            connPool[poolIdx].idxB = select(i, j, pidI < pidJ);
+            connPool[poolIdx].state = 3u;
+            found = true;
+            break;
+          }
+          if (stored == EMPTY) { break; }
+        }
+
+        if (!found) {
+          let freeIdx = atomicSub(&connAtomics[1], 1u);
+          if (freeIdx == 0u || freeIdx > cu.maxConnSlots) {
+            atomicAdd(&connAtomics[1], 1u);
+            continue;
+          }
+          let poolSlot = connFreeList[freeIdx - 1u];
+
+          connPool[poolSlot].pidA = min(pidI, pidJ);
+          connPool[poolSlot].pidB = max(pidI, pidJ);
+          connPool[poolSlot].alpha = 0.0;
+          connPool[poolSlot].tgt = targetAlpha;
+          connPool[poolSlot].idxA = select(j, i, pidI < pidJ);
+          connPool[poolSlot].idxB = select(i, j, pidI < pidJ);
+          connPool[poolSlot].state = 3u;
+          connPool[poolSlot]._pad = 0u;
+          connPool[poolSlot].frozenAx = 0.0;
+          connPool[poolSlot].frozenAy = 0.0;
+          connPool[poolSlot].frozenBx = 0.0;
+          connPool[poolSlot].frozenBy = 0.0;
+
+          for (var probe = 0u; probe < MAX_PROBE; probe++) {
+            let slot = (h + probe) & HASH_MASK;
+            let old = atomicCompareExchangeWeak(&hashTable[slot * 2u], EMPTY, ck);
+            if (old.exchanged) {
+              atomicStore(&hashTable[slot * 2u + 1u], poolSlot);
+              break;
+            }
+            if (old.old_value == ck) {
+              connPool[poolSlot].state = 0u;
+              let existPoolIdx = atomicLoad(&hashTable[slot * 2u + 1u]);
+              connPool[existPoolIdx].tgt = targetAlpha;
+              connPool[existPoolIdx].state = 3u;
+              break;
+            }
+          }
+        }
+
+        atomicAdd(&neighborCount[i], 1u);
+        atomicAdd(&neighborCount[j], 1u);
+      }
+    }
+  }
+}
+
+@compute @workgroup_size(256)
+fn connFade(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= cu.maxConnSlots) { return; }
+  var c = connPool[i];
+  if (c.state == 0u) { return; }
+
+  if (cu.doSearch == 1u && c.state == 1u) {
+    c.tgt = 0.0;
+  }
+  if (c.state == 3u) {
+    c.state = 1u;
+  }
+
+  if (c.state == 1u) {
+    let flagsA = pOut[c.idxA].flags;
+    let flagsB = pOut[c.idxB].flags;
+    let deadA = (flagsA & 1u) != 0u;
+    let deadB = (flagsB & 1u) != 0u;
+    let wrappedA = (flagsA & 8u) != 0u;
+    let wrappedB = (flagsB & 8u) != 0u;
+
+    if (wrappedA || wrappedB) {
+      let ck = canonKey(c.pidA, c.pidB);
+      let h = hashKey(c.pidA, c.pidB);
+      for (var probe = 0u; probe < MAX_PROBE; probe++) {
+        let slot = (h + probe) & HASH_MASK;
+        let stored = atomicLoad(&hashTable[slot * 2u]);
+        if (stored == ck) {
+          atomicStore(&hashTable[slot * 2u], EMPTY);
+          break;
+        }
+        if (stored == EMPTY) { break; }
+      }
+      c.state = 0u;
+      connPool[i] = c;
+      return;
+    }
+
+    if (deadA || deadB) {
+      c.frozenAx = pOut[c.idxA].x;
+      c.frozenAy = pOut[c.idxA].y;
+      c.frozenBx = pOut[c.idxB].x;
+      c.frozenBy = pOut[c.idxB].y;
+      c.state = 2u;
+      c.tgt = 0.0;
+    }
+  }
+
+  let rate = select(cu.connFadeOut, cu.connFadeIn, c.tgt > c.alpha);
+  c.alpha += (c.tgt - c.alpha) * rate;
+
+  if (c.alpha < cu.connKillAlpha && c.tgt == 0.0) {
+    let ck = canonKey(c.pidA, c.pidB);
+    let h = hashKey(c.pidA, c.pidB);
+    for (var probe = 0u; probe < MAX_PROBE; probe++) {
+      let slot = (h + probe) & HASH_MASK;
+      let stored = atomicLoad(&hashTable[slot * 2u]);
+      if (stored == ck) {
+        atomicStore(&hashTable[slot * 2u], EMPTY);
+        break;
+      }
+      if (stored == EMPTY) { break; }
+    }
+    c.state = 0u;
+    connPool[i] = c;
+    return;
+  }
+
+  var ax: f32; var ay: f32; var bx: f32; var by: f32;
+  if (c.state == 2u) {
+    ax = c.frozenAx; ay = c.frozenAy;
+    bx = c.frozenBx; by = c.frozenBy;
+  } else {
+    ax = pOut[c.idxA].x; ay = pOut[c.idxA].y;
+    bx = pOut[c.idxB].x; by = pOut[c.idxB].y;
+  }
+
+  let lineIdx = atomicAdd(&connAtomics[0], 1u);
+  let off = lineIdx * 6u;
+  renderLines[off + 0u] = ${hasF16 ? 'f16(ax)' : 'ax'};
+  renderLines[off + 1u] = ${hasF16 ? 'f16(ay)' : 'ay'};
+  renderLines[off + 2u] = ${hasF16 ? 'f16(c.alpha)' : 'c.alpha'};
+  renderLines[off + 3u] = ${hasF16 ? 'f16(bx)' : 'bx'};
+  renderLines[off + 4u] = ${hasF16 ? 'f16(by)' : 'by'};
+  renderLines[off + 5u] = ${hasF16 ? 'f16(c.alpha)' : 'c.alpha'};
+
+  connPool[i] = c;
+}
+
+@compute @workgroup_size(1)
+fn writeIndirect() {
+  let lineCount = atomicLoad(&connAtomics[0]);
+  lineIndirect[0] = lineCount * 2u;
+  lineIndirect[1] = 1u;
+  lineIndirect[2] = 0u;
+  lineIndirect[3] = 0u;
+}
+
+`;
+  }
+
+  // ── Flags extract shader (separate module for minimal readback) ──────
+  function makeFlagsExtractWGSL(hasF16) {
+    const pOutStruct = hasF16 ? `
+struct POut {
+  x: f32, y: f32,
+  vx: f16, vy: f16,
+  size: f16, alpha_out: f16,
+  pid: u32, flags: u32,
+};` : `
+struct POut {
+  x: f32, y: f32, vx: f32, vy: f32,
+  size: f32, alpha_out: f32,
+  pid: u32, flags: u32,
+};`;
+    return `${hasF16 ? 'enable f16;\n' : ''}
+${pOutStruct}
+
+struct ExtractUniforms { particleCount: u32, };
+
+@group(0) @binding(0) var<storage, read> pOutSrc: array<POut>;
+@group(0) @binding(1) var<storage, read_write> flagsDst: array<u32>;
+@group(0) @binding(2) var<uniform> eu: ExtractUniforms;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= eu.particleCount) { return; }
+  flagsDst[i] = pOutSrc[i].flags;
+}
+`;
+  }
+
+  // ── WebGPU particle render shader ────────────────────────────────────
+  function makeParticleRenderWGSL(hasF16, packed) {
+    const pOutStruct = hasF16 ? `
+struct POut {
+  x: f32, y: f32,
+  vx: f16, vy: f16,
+  size: f16, alpha_out: f16,
+  pid: u32, flags: u32,
+};` : `
+struct POut {
+  x: f32, y: f32, vx: f32, vy: f32,
+  size: f32, alpha_out: f32,
+  pid: u32, flags: u32,
+};`;
+    return `${hasF16 ? 'enable f16;\n' : ''}
+${pOutStruct}
+
+struct RenderUniforms {
+  resX: f32, resY: f32,
+  glowAlpha: f32,
+  maxConn: f32,
+  goldR: f32, goldG: f32, goldB: f32,
+  whiteR: f32, whiteG: f32, whiteB: f32,
+  _pad0: f32, _pad1: f32,
+};
+
+@group(0) @binding(0) var<storage, read> particles: array<POut>;
+@group(0) @binding(1) var<storage, read> nCount: array<u32>;
+@group(0) @binding(2) var<uniform> ru: RenderUniforms;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) alpha: f32,
+  @location(2) whiten: f32,
+};
+
+// Quad corners for 2 triangles (6 vertices per particle)
+const QUAD_UV = array<vec2f, 6>(
+  vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
+  vec2f(1.0, 0.0), vec2f(1.0, 1.0), vec2f(0.0, 1.0),
+);
+
+@vertex
+fn vs(@builtin(vertex_index) vid: u32) -> VSOut {
+  let pIdx = vid / 6u;
+  let vIdx = vid % 6u;
+  let p = particles[pIdx];
+
+  var out: VSOut;
+  let flags = p.flags;
+  let dead = (flags & 1u) != 0u;
+
+  if (dead) {
+    out.pos = vec4f(0.0, 0.0, 0.0, 1.0);
+    out.alpha = 0.0;
+    out.whiten = 0.0;
+    out.uv = vec2f(0.0);
+    return out;
+  }
+
+  let size = f32(p.size);
+  let alpha = f32(p.alpha_out);
+  let vx = f32(p.vx);
+  let vy = f32(p.vy);
+
+  // Whiten calculation (same as CPU line 2516-2521)
+  var wt = 0.0;
+  let canWhiten = (flags & 4u) != 0u;
+  if (canWhiten) {
+    let spd = sqrt(vx * vx + vy * vy);
+    let density = f32(nCount[pIdx${packed ? ` + ${MAX_CONN_SLOTS}u` : ''}]) / ru.maxConn;
+    wt = min(1.0, max(0.0, (spd - 0.3) * 0.9) + density * 0.7);
+  }
+
+  // Expand quad corner
+  let corner = QUAD_UV[vIdx];
+  let halfSize = size * 0.5;
+  let px = p.x + (corner.x - 0.5) * size;
+  let py = p.y + (corner.y - 0.5) * size;
+
+  // Pixel → clip space
+  let clipX = (px / ru.resX) * 2.0 - 1.0;
+  let clipY = -((py / ru.resY) * 2.0 - 1.0);
+
+  out.pos = vec4f(clipX, clipY, 0.0, 1.0);
+  out.uv = corner;
+  out.alpha = alpha;
+  out.whiten = wt;
+  return out;
+}
+
+@fragment
+fn fs(in: VSOut) -> @location(0) vec4f {
+  let center = in.uv - 0.5;
+  let dist = length(center) * 2.0;
+  if (dist > 1.0) { discard; }
+
+  let coreFrac = 0.333;
+  let coreAlpha = 1.0 - smoothstep(coreFrac - 0.06, coreFrac + 0.06, dist);
+  let glowDist = max(0.0, dist - coreFrac) / (1.0 - coreFrac);
+  let glowFade = (1.0 - glowDist * glowDist) * step(dist, 1.0);
+  let hasGlow = step(0.15, in.alpha);
+  let alpha = coreAlpha * in.alpha + glowFade * ru.glowAlpha * in.alpha * hasGlow;
+  if (alpha < 0.002) { discard; }
+
+  let gold = vec3f(ru.goldR, ru.goldG, ru.goldB);
+  let white = vec3f(ru.whiteR, ru.whiteG, ru.whiteB);
+  let col = mix(gold, white, in.whiten);
+  return vec4f(col * alpha, alpha);
+}
+`;
+  }
+
+  // ── WebGPU line render shader ────────────────────────────────────────
+  function makeLineRenderWGSL(hasF16) {
+    const elType = hasF16 ? 'f16' : 'f32';
+    return `${hasF16 ? 'enable f16;\n' : ''}
+struct LineUniforms {
+  resX: f32, resY: f32,
+};
+
+@group(0) @binding(0) var<storage, read> lines: array<${elType}>;
+@group(0) @binding(1) var<uniform> lu: LineUniforms;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) alpha: f32,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vid: u32) -> VSOut {
+  // Each line = 6 values: [ax, ay, alphaA, bx, by, alphaB]
+  let lineIdx = vid / 2u;
+  let isB = vid % 2u;
+  let off = lineIdx * 6u + isB * 3u;
+  let px = f32(lines[off + 0u]);
+  let py = f32(lines[off + 1u]);
+  let alpha = f32(lines[off + 2u]);
+
+  let clipX = (px / lu.resX) * 2.0 - 1.0;
+  let clipY = -((py / lu.resY) * 2.0 - 1.0);
+
+  var out: VSOut;
+  out.pos = vec4f(clipX, clipY, 0.0, 1.0);
+  out.alpha = alpha;
+  return out;
+}
+
+@fragment
+fn fs(in: VSOut) -> @location(0) vec4f {
+  let a = in.alpha;
+  return vec4f(0.831 * a, 0.659 * a, 0.263 * a, a);
+}
+`;
+  }
+
   // Uniform buffer layout: 22 fields, padded to 96 bytes (24 x f32)
   const GPU_UNIFORM_SIZE = 96;
   const gpuUniformData = new ArrayBuffer(GPU_UNIFORM_SIZE);
@@ -1868,11 +2919,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
       if (!adapter) return;
       const hasF16 = adapter.features.has('shader-f16') && localStorage.getItem('sonara_f16') !== '0';
+      const maxStorage = adapter.limits.maxStorageBuffersPerShaderStage;
+      const usePackedConn = maxStorage < 12;
       const device = await adapter.requestDevice({
         requiredFeatures: hasF16 ? ['shader-f16'] : [],
         requiredLimits: {
           maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
           maxBufferSize: adapter.limits.maxBufferSize,
+          ...(!usePackedConn ? { maxStorageBuffersPerShaderStage: 12 } : {}),
         }
       });
       if (!device) return;
@@ -1883,6 +2937,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         GPU_OUTPUT_STRIDE = 24;
         console.log('shader-f16 supported: particle 40B, output 24B');
       }
+      console.log(`Storage buffers per stage: ${maxStorage}, using ${usePackedConn ? 'packed' : 'unpacked'} connections`);
 
       const shaderModule = device.createShaderModule({ code: hasF16 ? WGSL_PHYSICS_F16 : WGSL_PHYSICS });
       const compilationInfo = await shaderModule.getCompilationInfo();
@@ -1908,12 +2963,171 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         compute: { module: shaderModule, entryPoint: 'main' },
       });
 
+      // ── Connection compute pipelines ──────────────────────────────────
+      const connShaderModule = device.createShaderModule({ code: makeConnWGSL(hasF16, usePackedConn) });
+      const connInfo = await connShaderModule.getCompilationInfo();
+      for (const msg of connInfo.messages) {
+        if (msg.type === 'error') {
+          console.error('Connection WGSL compile error:', msg.message, 'line', msg.lineNum);
+          return;
+        }
+      }
+
+      let connPipelineLayout;
+      if (usePackedConn) {
+        // Packed: single bind group, 8 storage + 1 uniform
+        const connBindGroupLayout = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // pOut
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // connPool
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // hashTable
+            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // gridData (packed)
+            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // gridIndices
+            { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // renderLines
+            { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // auxCounters (packed)
+            { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }, // connUniforms
+            { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // auxPool (packed)
+          ],
+        });
+        device._connBindGroupLayout0 = connBindGroupLayout;
+        device._connBindGroupLayout1 = null;
+        connPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [connBindGroupLayout] });
+      } else {
+        // Unpacked: 2 bind groups, 11 storage + 1 uniform
+        const connBindGroupLayout0 = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // pOut
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // connPool
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // hashTable
+            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // gridCounts
+            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // gridOffsets
+            { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // gridIndices
+            { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // connAtomics
+            { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }, // connUniforms
+          ],
+        });
+        const connBindGroupLayout1 = device.createBindGroupLayout({
+          entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // renderLines
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // neighborCount
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // lineIndirect
+            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // connFreeList
+          ],
+        });
+        device._connBindGroupLayout0 = connBindGroupLayout0;
+        device._connBindGroupLayout1 = connBindGroupLayout1;
+        connPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [connBindGroupLayout0, connBindGroupLayout1] });
+      }
+
+      const makeConnPipeline = (entryPoint) => device.createComputePipeline({
+        layout: connPipelineLayout,
+        compute: { module: connShaderModule, entryPoint },
+      });
+      const connPipelines = {
+        gridClear: makeConnPipeline('gridClear'),
+        gridCount: makeConnPipeline('gridCount'),
+        gridPrefixSum: makeConnPipeline('gridPrefixSum'),
+        gridScatter: makeConnPipeline('gridScatter'),
+        buildFreeList: makeConnPipeline('buildFreeList'),
+        connSearch: makeConnPipeline('connSearch'),
+        connFade: makeConnPipeline('connFade'),
+        writeIndirect: makeConnPipeline('writeIndirect'),
+      };
+
+      // ── Flags extract pipeline ──────────────────────────────────────
+      const flagsShaderModule = device.createShaderModule({ code: makeFlagsExtractWGSL(hasF16) });
+      const flagsBindGroupLayout = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+          { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+          { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        ],
+      });
+      const flagsExtractPipeline = device.createComputePipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [flagsBindGroupLayout] }),
+        compute: { module: flagsShaderModule, entryPoint: 'main' },
+      });
+
+      // ── WebGPU render pipelines ─────────────────────────────────────
+      const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+      const blendState = {
+        color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      };
+
+      // Particle render pipeline
+      const particleRenderModule = device.createShaderModule({ code: makeParticleRenderWGSL(hasF16, usePackedConn) });
+      const particleRenderInfo = await particleRenderModule.getCompilationInfo();
+      for (const msg of particleRenderInfo.messages) {
+        if (msg.type === 'error') {
+          console.error('Particle render WGSL error:', msg.message, 'line', msg.lineNum);
+          return;
+        }
+      }
+
+      const particleRenderBGL = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },  // particles
+          { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },  // neighborCount
+          { binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }, // uniforms
+        ],
+      });
+
+      const particleRenderPipeline = device.createRenderPipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [particleRenderBGL] }),
+        vertex: { module: particleRenderModule, entryPoint: 'vs' },
+        fragment: {
+          module: particleRenderModule,
+          entryPoint: 'fs',
+          targets: [{ format: canvasFormat, blend: blendState }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+
+      // Line render pipeline
+      const lineRenderModule = device.createShaderModule({ code: makeLineRenderWGSL(hasF16) });
+      const lineRenderInfo = await lineRenderModule.getCompilationInfo();
+      for (const msg of lineRenderInfo.messages) {
+        if (msg.type === 'error') {
+          console.error('Line render WGSL error:', msg.message, 'line', msg.lineNum);
+          return;
+        }
+      }
+
+      const lineRenderBGL = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },  // lines
+          { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }, // uniforms
+        ],
+      });
+
+      const lineRenderPipeline = device.createRenderPipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [lineRenderBGL] }),
+        vertex: { module: lineRenderModule, entryPoint: 'vs' },
+        fragment: {
+          module: lineRenderModule,
+          entryPoint: 'fs',
+          targets: [{ format: canvasFormat, blend: blendState }],
+        },
+        primitive: { topology: 'line-list' },
+      });
+
       // Store references — buffers created on init() when we know particle count
       gpuDevice = device;
       gpuPhysicsPipeline = pipeline;
       gpuDevice._bindGroupLayout = bindGroupLayout;
+      // connBindGroupLayout0/1 already stored on device._ in the packed/unpacked branches above
+      gpuDevice._usePackedConn = usePackedConn;
+      gpuDevice._flagsBindGroupLayout = flagsBindGroupLayout;
+      gpuDevice._flagsExtractPipeline = flagsExtractPipeline;
+      gpuDevice._particleRenderBGL = particleRenderBGL;
+      gpuDevice._lineRenderBGL = lineRenderBGL;
+      gpuConnPipelines = connPipelines;
+      gpuParticleRenderPipeline = particleRenderPipeline;
+      gpuLineRenderPipeline = lineRenderPipeline;
+      gpuCanvasFormat = canvasFormat;
 
-      console.log('WebGPU compute ready — hot-swapping from CPU');
+      console.log('WebGPU compute + render pipelines ready');
       // Hot-swap: re-run init() now that gpuDevice is available
       if (w && h) init();
     } catch (e) {
@@ -1942,7 +3156,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     });
     gpuOutputBuf = device.createBuffer({
       size: outputBufSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
     gpuOutputReadBuf = device.createBuffer({
       size: outputBufSize,
@@ -1981,6 +3195,204 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       gpuOutputCPU = new Float32Array(count * 8);
     }
     gpuParticleCount = count;
+
+    // ── Connection compute buffers ──────────────────────────────────
+    if (gpuConnPool) gpuConnPool.destroy();
+    if (gpuConnHashTable) gpuConnHashTable.destroy();
+    // Destroy old connection buffers
+    const connBufs = [gpuGridCounts, gpuGridOffsets, gpuGridIndices, gpuRenderLines,
+      gpuConnAtomics, gpuConnUniformBuf, gpuNeighborCount, gpuLineIndirectBuf,
+      gpuConnFreeList, gpuGridData, gpuAuxCounters, gpuAuxPool,
+      gpuFlagsExtractBuf, gpuFlagsReadBuf, gpuRenderUniformBuf];
+    for (const b of connBufs) { if (b) b.destroy(); }
+
+    const packed = gpuDevice._usePackedConn;
+
+    // Shared buffers (both tiers)
+    gpuConnPool = device.createBuffer({
+      size: MAX_CONN_SLOTS * 48,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    gpuConnHashTable = device.createBuffer({
+      size: CONN_HASH_SIZE * 2 * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    gpuGridIndices = device.createBuffer({
+      size: count * 4,
+      usage: GPUBufferUsage.STORAGE,
+    });
+    gpuRenderLines = device.createBuffer({
+      size: MAX_CONN_SLOTS * 6 * (gpuHasF16 ? 2 : 4),
+      usage: GPUBufferUsage.STORAGE,
+    });
+    const CONN_UNIFORM_SIZE = 64;
+    gpuConnUniformBuf = device.createBuffer({
+      size: CONN_UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    if (packed) {
+      // Packed tier: 3 merged buffers
+      // gridData = gridCounts[0..255] + gridOffsets[256..511]
+      gpuGridData = device.createBuffer({
+        size: MAX_GRID_CELLS * 2 * 4, // 512 u32s
+        usage: GPUBufferUsage.STORAGE,
+      });
+      // auxCounters = connAtomics[0..1] + lineIndirect[2..5]
+      gpuAuxCounters = device.createBuffer({
+        size: 6 * 4, // 6 u32s (2 atomics + 4 indirect draw params)
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.INDIRECT,
+      });
+      // auxPool = connFreeList[0..MAX_CONN_SLOTS-1] + neighborCount[MAX_CONN_SLOTS..]
+      gpuAuxPool = device.createBuffer({
+        size: (MAX_CONN_SLOTS + count) * 4,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      // Null out unpacked-only refs
+      gpuGridCounts = null; gpuGridOffsets = null;
+      gpuConnAtomics = null; gpuNeighborCount = null;
+      gpuLineIndirectBuf = null; gpuConnFreeList = null;
+    } else {
+      // Enhanced tier: individual buffers
+      gpuGridCounts = device.createBuffer({
+        size: MAX_GRID_CELLS * 4,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      gpuGridOffsets = device.createBuffer({
+        size: MAX_GRID_CELLS * 4,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      gpuConnAtomics = device.createBuffer({
+        size: 8,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+      });
+      gpuNeighborCount = device.createBuffer({
+        size: count * 4,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      gpuLineIndirectBuf = device.createBuffer({
+        size: 16,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT,
+      });
+      gpuConnFreeList = device.createBuffer({
+        size: MAX_CONN_SLOTS * 4,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      // Null out packed-only refs
+      gpuGridData = null; gpuAuxCounters = null; gpuAuxPool = null;
+    }
+
+    // Flags extract + readback (both tiers)
+    gpuFlagsExtractBuf = device.createBuffer({
+      size: count * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    gpuFlagsReadBuf = device.createBuffer({
+      size: count * 4,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    // Line count readback for debug HUD (4 bytes = 1 u32)
+    if (gpuLineCountReadBuf) gpuLineCountReadBuf.destroy();
+    gpuLineCountReadBuf = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    gpuRenderUniformBuf = device.createBuffer({
+      size: 48,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // Initialize hash table to EMPTY (0xFFFFFFFF)
+    const hashInit = new Uint32Array(CONN_HASH_SIZE * 2);
+    hashInit.fill(0xFFFFFFFF);
+    device.queue.writeBuffer(gpuConnHashTable, 0, hashInit);
+
+    // Connection compute bind groups
+    if (packed) {
+      gpuConnBindGroup = device.createBindGroup({
+        layout: gpuDevice._connBindGroupLayout0,
+        entries: [
+          { binding: 0, resource: { buffer: gpuOutputBuf } },
+          { binding: 1, resource: { buffer: gpuConnPool } },
+          { binding: 2, resource: { buffer: gpuConnHashTable } },
+          { binding: 3, resource: { buffer: gpuGridData } },
+          { binding: 4, resource: { buffer: gpuGridIndices } },
+          { binding: 5, resource: { buffer: gpuRenderLines } },
+          { binding: 6, resource: { buffer: gpuAuxCounters } },
+          { binding: 7, resource: { buffer: gpuConnUniformBuf } },
+          { binding: 8, resource: { buffer: gpuAuxPool } },
+        ],
+      });
+      gpuConnBindGroup1 = null;
+    } else {
+      gpuConnBindGroup = device.createBindGroup({
+        layout: gpuDevice._connBindGroupLayout0,
+        entries: [
+          { binding: 0, resource: { buffer: gpuOutputBuf } },
+          { binding: 1, resource: { buffer: gpuConnPool } },
+          { binding: 2, resource: { buffer: gpuConnHashTable } },
+          { binding: 3, resource: { buffer: gpuGridCounts } },
+          { binding: 4, resource: { buffer: gpuGridOffsets } },
+          { binding: 5, resource: { buffer: gpuGridIndices } },
+          { binding: 6, resource: { buffer: gpuConnAtomics } },
+          { binding: 7, resource: { buffer: gpuConnUniformBuf } },
+        ],
+      });
+      gpuConnBindGroup1 = device.createBindGroup({
+        layout: gpuDevice._connBindGroupLayout1,
+        entries: [
+          { binding: 0, resource: { buffer: gpuRenderLines } },
+          { binding: 1, resource: { buffer: gpuNeighborCount } },
+          { binding: 2, resource: { buffer: gpuLineIndirectBuf } },
+          { binding: 3, resource: { buffer: gpuConnFreeList } },
+        ],
+      });
+    }
+
+    // ── WebGPU canvas context + render bind groups ──────────────────
+    const gpuRenderEnabled = !isLocal || localStorage.getItem('sonara_gpu_render') !== '0';
+    if (gpuParticleRenderPipeline && !WEBGPU_RENDER && gpuRenderEnabled) {
+      const gpuCanvas = document.createElement('canvas');
+      gpuCanvas.width = canvas.width;
+      gpuCanvas.height = canvas.height;
+      gpuCanvas.style.cssText = canvas.style.cssText;
+      if (canvas.id) gpuCanvas.id = canvas.id;
+      if (canvas.className) gpuCanvas.className = canvas.className;
+      gpuRenderContext = gpuCanvas.getContext('webgpu');
+      gpuRenderContext.configure({
+        device: device,
+        format: gpuCanvasFormat,
+        alphaMode: 'premultiplied',
+      });
+      canvas.parentNode.replaceChild(gpuCanvas, canvas);
+      canvas = gpuCanvas;
+      WEBGPU_RENDER = true;
+      console.log('WebGPU render canvas activated');
+    }
+
+    // Particle render bind group — neighborCount source differs by tier
+    if (gpuParticleRenderPipeline) {
+      const nCountBuf = packed ? gpuAuxPool : gpuNeighborCount;
+      gpuParticleRenderBindGroup = device.createBindGroup({
+        layout: gpuDevice._particleRenderBGL,
+        entries: [
+          { binding: 0, resource: { buffer: gpuOutputBuf } },
+          { binding: 1, resource: { buffer: nCountBuf } },
+          { binding: 2, resource: { buffer: gpuRenderUniformBuf } },
+        ],
+      });
+    }
+
+    // Line render bind group
+    if (gpuLineRenderPipeline) {
+      gpuLineRenderBindGroup = device.createBindGroup({
+        layout: gpuDevice._lineRenderBGL,
+        entries: [
+          { binding: 0, resource: { buffer: gpuRenderLines } },
+          { binding: 1, resource: { buffer: gpuRenderUniformBuf } },
+        ],
+      });
+    }
   }
 
   // f16 write helper: packs one particle into a 40-byte ArrayBuffer via DataView
@@ -2024,7 +3436,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     h = canvas.height = canvas.offsetHeight * dpr;
     canvas.style.width = canvas.offsetWidth + 'px';
     canvas.style.height = canvas.offsetHeight + 'px';
-    gl.viewport(0, 0, w, h);
+    if (WEBGPU_RENDER && gpuRenderContext) {
+      gpuRenderContext.configure({
+        device: gpuDevice,
+        format: gpuCanvasFormat,
+        alphaMode: 'premultiplied',
+      });
+    } else {
+      gl.viewport(0, 0, w, h);
+    }
     grid.clear();
   }
 
@@ -2067,6 +3487,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     connFade.clear();
     grid.clear();
     framePairs.clear();
+    gpuConnSearchFrame = 0;
     const initialParticleCount = getSeedCount();
 
     // WebGPU compute path
@@ -2325,7 +3746,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       heroSrc.playbackRate.value = 1.0;
     }
 
-    let autoCount = 0, aliveCount = 0;
+    let autoCount = 0;
+    let aliveCount = WEBGPU_RENDER ? (gpuWatermark - gpuFreeSlots.length) : 0;
     let gpuRenderCount = 0;
 
     // ==================================================================
@@ -2433,13 +3855,17 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       gpuUniformF32[16] = HERO_PARTICLE_BRIGHTNESS;
       gpuUniformF32[17] = Math.random() * 1000;
       gpuUniformU32[18] = gpuWatermark;
+      gpuUniformF32[19] = gpuResizeScaleX;
+      gpuUniformF32[20] = gpuResizeScaleY;
+      gpuResizeScaleX = 1.0;
+      gpuResizeScaleY = 1.0;
 
       gpuDevice.queue.writeBuffer(gpuUniformBuf, 0, gpuUniformData);
       gpuDevice.queue.writeBuffer(gpuBrightnessRippleBuf, 0, brightnessRippleBuf);
       gpuDevice.queue.writeBuffer(gpuSpinRippleBuf, 0, spinRippleBuf);
 
-      // --- Process PREVIOUS frame's readback (skip until first real readback) ---
-      if (gpuOutputCPU && gpuFirstReadback) {
+      // --- Process PREVIOUS frame's readback (skip when GPU renders directly) ---
+      if (!WEBGPU_RENDER && gpuOutputCPU && gpuFirstReadback) {
         const out = gpuOutputCPU;
         const outDV = gpuHasF16 ? new DataView(out.buffer, out.byteOffset) : null;
         const outU32 = gpuHasF16 ? null : new Uint32Array(out.buffer, out.byteOffset, out.length);
@@ -2529,43 +3955,238 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
       // --- Dispatch compute ---
       const commandEncoder = gpuDevice.createCommandEncoder();
-      const pass = commandEncoder.beginComputePass();
-      pass.setPipeline(gpuPhysicsPipeline);
-      pass.setBindGroup(0, gpuBindGroup);
-      pass.dispatchWorkgroups(Math.ceil(gpuWatermark / 256));
-      pass.end();
+      const physicsPass = commandEncoder.beginComputePass();
+      physicsPass.setPipeline(gpuPhysicsPipeline);
+      physicsPass.setBindGroup(0, gpuBindGroup);
+      physicsPass.dispatchWorkgroups(Math.ceil(gpuWatermark / 256));
+      physicsPass.end();
 
-      // Copy output to readback buffer only if it's not currently mapped/pending
-      if (!gpuReadbackPending) {
-        const readbackBytes = gpuWatermark * GPU_OUTPUT_STRIDE;
-        commandEncoder.copyBufferToBuffer(gpuOutputBuf, 0, gpuOutputReadBuf, 0, readbackBytes);
-      }
-      gpuDevice.queue.submit([commandEncoder.finish()]);
+      if (WEBGPU_RENDER && gpuConnBindGroup) {
+        // ── Connection compute dispatches ──────────────────────────────
+        gpuConnSearchFrame++;
+        const doSearch = gpuConnSearchFrame >= CONN_SEARCH_INTERVAL;
+        if (doSearch) gpuConnSearchFrame = 0;
 
-      // Start async readback for NEXT frame (skip if previous still pending)
-      if (!gpuReadbackPending) {
-        gpuReadbackPending = true;
-        gpuOutputReadBuf.mapAsync(GPUMapMode.READ).then(() => {
-          const range = gpuOutputReadBuf.getMappedRange();
-          if (gpuHasF16) {
-            // f16: mixed types, copy as raw bytes
-            const mapped = new Uint8Array(range);
-            if (!gpuOutputCPU || gpuOutputCPU.byteLength < mapped.byteLength) {
-              gpuOutputCPU = new Uint8Array(mapped.byteLength);
-            }
-            gpuOutputCPU.set(mapped);
-          } else {
-            // f32: all floats
-            const mapped = new Float32Array(range);
-            if (!gpuOutputCPU || gpuOutputCPU.length < mapped.length) {
-              gpuOutputCPU = new Float32Array(mapped.length);
-            }
-            gpuOutputCPU.set(mapped);
+        // Upload connection uniforms
+        const CELL = CONN_REACH;
+        const gridCols = Math.ceil(w / CELL) + 1;
+        const gridRows = Math.ceil(h / CELL) + 1;
+        const connUniformData = new Float32Array(16);
+        const connUniformU32 = new Uint32Array(connUniformData.buffer);
+        connUniformData[0] = CONN_REACH_SQ;
+        connUniformData[1] = CONN_FADE_START_SQ;
+        connUniformData[2] = CONN_BUCKET_DIV;
+        connUniformU32[3] = MAX_CONN;
+        connUniformData[4] = CONN_FADE_IN;
+        connUniformData[5] = CONN_FADE_OUT;
+        connUniformData[6] = CONN_KILL_ALPHA;
+        connUniformU32[7] = doSearch ? 1 : 0;
+        connUniformData[8] = lineIntensity;
+        connUniformData[9] = HERO_PARTICLE_BRIGHTNESS;
+        connUniformU32[10] = gridCols;
+        connUniformU32[11] = gridRows;
+        connUniformData[12] = CELL;
+        connUniformU32[13] = gpuWatermark;
+        connUniformU32[14] = MAX_CONN_SLOTS;
+        connUniformData[15] = LINE_BASE;
+        gpuDevice.queue.writeBuffer(gpuConnUniformBuf, 0, connUniformData);
+
+        // Reset atomic counters: [0]=line count, [1]=free list count
+        const atomicReset = new Uint32Array([0, 0]);
+        const atomicBuf = gpuDevice._usePackedConn ? gpuAuxCounters : gpuConnAtomics;
+        gpuDevice.queue.writeBuffer(atomicBuf, 0, atomicReset);
+
+        const wgParticles = Math.ceil(gpuWatermark / 256);
+        const wgConns = Math.ceil(MAX_CONN_SLOTS / 256);
+        const setConnBindGroups = (pass) => {
+          pass.setBindGroup(0, gpuConnBindGroup);
+          if (gpuConnBindGroup1) pass.setBindGroup(1, gpuConnBindGroup1);
+        };
+
+        if (doSearch) {
+          const p1 = commandEncoder.beginComputePass();
+          p1.setPipeline(gpuConnPipelines.gridClear);
+          setConnBindGroups(p1);
+          p1.dispatchWorkgroups(Math.max(wgParticles, 1));
+          p1.end();
+
+          const p2 = commandEncoder.beginComputePass();
+          p2.setPipeline(gpuConnPipelines.gridCount);
+          setConnBindGroups(p2);
+          p2.dispatchWorkgroups(wgParticles);
+          p2.end();
+
+          const p3 = commandEncoder.beginComputePass();
+          p3.setPipeline(gpuConnPipelines.gridPrefixSum);
+          setConnBindGroups(p3);
+          p3.dispatchWorkgroups(1);
+          p3.end();
+
+          const p4 = commandEncoder.beginComputePass();
+          p4.setPipeline(gpuConnPipelines.gridScatter);
+          setConnBindGroups(p4);
+          p4.dispatchWorkgroups(wgParticles);
+          p4.end();
+
+          const p5 = commandEncoder.beginComputePass();
+          p5.setPipeline(gpuConnPipelines.buildFreeList);
+          setConnBindGroups(p5);
+          p5.dispatchWorkgroups(wgConns);
+          p5.end();
+
+          const p6 = commandEncoder.beginComputePass();
+          p6.setPipeline(gpuConnPipelines.connSearch);
+          setConnBindGroups(p6);
+          p6.dispatchWorkgroups(wgParticles);
+          p6.end();
+        }
+
+        const fadePass = commandEncoder.beginComputePass();
+        fadePass.setPipeline(gpuConnPipelines.connFade);
+        setConnBindGroups(fadePass);
+        fadePass.dispatchWorkgroups(Math.ceil(MAX_CONN_SLOTS / 256));
+        fadePass.end();
+
+        const indirectPass = commandEncoder.beginComputePass();
+        indirectPass.setPipeline(gpuConnPipelines.writeIndirect);
+        setConnBindGroups(indirectPass);
+        indirectPass.dispatchWorkgroups(1);
+        indirectPass.end();
+
+        // ── WebGPU render pass ──────────────────────────────────────────
+        // Upload render uniforms
+        const whiteCol = getWhiteParticleColor();
+        const renderUniformData = new Float32Array([
+          w, h,
+          (0.06 + brightnessLevel * 0.08) * HERO_PARTICLE_BRIGHTNESS,
+          MAX_CONN,
+          HERO_GOLD_RGB.r, HERO_GOLD_RGB.g, HERO_GOLD_RGB.b,
+          whiteCol.r, whiteCol.g, whiteCol.b,
+          0, 0,
+        ]);
+        gpuDevice.queue.writeBuffer(gpuRenderUniformBuf, 0, renderUniformData);
+
+        const textureView = gpuRenderContext.getCurrentTexture().createView();
+        const renderPass = commandEncoder.beginRenderPass({
+          colorAttachments: [{
+            view: textureView,
+            clearValue: { r: 6/255, g: 6/255, b: 8/255, a: 1 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          }],
+        });
+
+        // Draw lines (behind particles)
+        renderPass.setPipeline(gpuLineRenderPipeline);
+        renderPass.setBindGroup(0, gpuLineRenderBindGroup);
+        if (gpuDevice._usePackedConn) {
+          renderPass.drawIndirect(gpuAuxCounters, 8); // offset 8: skip 2 atomic counter u32s
+        } else {
+          renderPass.drawIndirect(gpuLineIndirectBuf, 0);
+        }
+
+        // Draw particles (quads: 6 vertices per particle)
+        renderPass.setPipeline(gpuParticleRenderPipeline);
+        renderPass.setBindGroup(0, gpuParticleRenderBindGroup);
+        renderPass.draw(6 * gpuWatermark);
+
+        renderPass.end();
+
+        // ── Minimal flags readback for slot recycling ───────────────────
+        // Extract flags into compact buffer, then async copy to CPU
+        if (!gpuReadbackPending && gpuDevice._flagsExtractPipeline) {
+          // We need a bind group for the flags extract shader
+          if (!gpuDevice._flagsBindGroup) {
+            const flagsExtractUniformBuf = gpuDevice.createBuffer({
+              size: 4,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            gpuDevice._flagsExtractUniformBuf = flagsExtractUniformBuf;
+            gpuDevice._flagsBindGroup = gpuDevice.createBindGroup({
+              layout: gpuDevice._flagsBindGroupLayout,
+              entries: [
+                { binding: 0, resource: { buffer: gpuOutputBuf } },
+                { binding: 1, resource: { buffer: gpuFlagsExtractBuf } },
+                { binding: 2, resource: { buffer: flagsExtractUniformBuf } },
+              ],
+            });
           }
-          gpuOutputReadBuf.unmap();
-          gpuReadbackPending = false;
-          gpuFirstReadback = true;
-        }).catch(() => { gpuReadbackPending = false; });
+          // Upload particle count uniform
+          gpuDevice.queue.writeBuffer(gpuDevice._flagsExtractUniformBuf, 0, new Uint32Array([gpuWatermark]));
+
+          const fxPass = commandEncoder.beginComputePass();
+          fxPass.setPipeline(gpuDevice._flagsExtractPipeline);
+          fxPass.setBindGroup(0, gpuDevice._flagsBindGroup);
+          fxPass.dispatchWorkgroups(Math.ceil(gpuWatermark / 256));
+          fxPass.end();
+
+          commandEncoder.copyBufferToBuffer(gpuFlagsExtractBuf, 0, gpuFlagsReadBuf, 0, gpuWatermark * 4);
+          // Copy line count (1 u32) for debug HUD
+          const lineCountSrc = gpuDevice._usePackedConn ? gpuAuxCounters : gpuConnAtomics;
+          commandEncoder.copyBufferToBuffer(lineCountSrc, 0, gpuLineCountReadBuf, 0, 4);
+        }
+
+        gpuDevice.queue.submit([commandEncoder.finish()]);
+
+        // Async flags readback for slot recycling + line count
+        if (!gpuReadbackPending) {
+          gpuReadbackPending = true;
+          // Map both readback buffers in parallel
+          const flagsPromise = gpuFlagsReadBuf.mapAsync(GPUMapMode.READ);
+          const lineCountPromise = gpuLineCountReadBuf.mapAsync(GPUMapMode.READ);
+          Promise.all([flagsPromise, lineCountPromise]).then(() => {
+            const range = gpuFlagsReadBuf.getMappedRange();
+            const flags = new Uint32Array(range);
+            for (let i = 0; i < gpuWatermark; i++) {
+              const f = flags[i];
+              const dead = (f & 1) !== 0;
+              const s = gpuSlots[i];
+              if (dead && !s.dead) {
+                s.dead = true;
+                gpuFreeSlots.push(i);
+              }
+            }
+            gpuFlagsReadBuf.unmap();
+            gpuLineCount = new Uint32Array(gpuLineCountReadBuf.getMappedRange())[0] || 0;
+            gpuLineCountReadBuf.unmap();
+            gpuReadbackPending = false;
+            gpuFirstReadback = true;
+            aliveCount = gpuWatermark - gpuFreeSlots.length;
+          }).catch(() => { gpuReadbackPending = false; });
+        }
+
+      } else {
+        // ── Legacy readback path (WebGL2 render) ──────────────────────
+        // Copy output to readback buffer only if it's not currently mapped/pending
+        if (!gpuReadbackPending) {
+          const readbackBytes = gpuWatermark * GPU_OUTPUT_STRIDE;
+          commandEncoder.copyBufferToBuffer(gpuOutputBuf, 0, gpuOutputReadBuf, 0, readbackBytes);
+        }
+        gpuDevice.queue.submit([commandEncoder.finish()]);
+
+        // Start async readback for NEXT frame (skip if previous still pending)
+        if (!gpuReadbackPending) {
+          gpuReadbackPending = true;
+          gpuOutputReadBuf.mapAsync(GPUMapMode.READ).then(() => {
+            const range = gpuOutputReadBuf.getMappedRange();
+            if (gpuHasF16) {
+              const mapped = new Uint8Array(range);
+              if (!gpuOutputCPU || gpuOutputCPU.byteLength < mapped.byteLength) {
+                gpuOutputCPU = new Uint8Array(mapped.byteLength);
+              }
+              gpuOutputCPU.set(mapped);
+            } else {
+              const mapped = new Float32Array(range);
+              if (!gpuOutputCPU || gpuOutputCPU.length < mapped.length) {
+                gpuOutputCPU = new Float32Array(mapped.length);
+              }
+              gpuOutputCPU.set(mapped);
+            }
+            gpuOutputReadBuf.unmap();
+            gpuReadbackPending = false;
+            gpuFirstReadback = true;
+          }).catch(() => { gpuReadbackPending = false; });
+        }
       }
 
     // ==================================================================
@@ -2757,8 +4378,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     // ==================================================================
-    // SPATIAL GRID + CONNECTION LINES (shared, source differs by path)
+    // SPATIAL GRID + CONNECTION LINES (CPU — skipped when GPU handles it)
     // ==================================================================
+    let lineVertCount = 0;
+    let lineIdx = 0;
+    lineIntensity += (brightnessLevel - lineIntensity) * 0.05;
+    if (!WEBGPU_RENDER) {
     const pSource = WEBGPU_ACTIVE ? gpuSlots : (GPU_PHYSICS ? cpuParticles : particles);
     const pCount  = WEBGPU_ACTIVE ? gpuWatermark : (GPU_PHYSICS ? highWater : particles.length);
 
@@ -2782,7 +4407,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       neighborCount.fill(0);
       const connCount = neighborCount;
       const aiBrightBoost = 1 + lineIntensity * 2;
-      const LINE_BASE = 0.08;
       const lineAlphas = [
         LINE_BASE * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
         LINE_BASE * 0.8 * aiBrightBoost * HERO_PARTICLE_BRIGHTNESS,
@@ -2842,8 +4466,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     } // end if (doConnSearch)
 
     // --- Update fade map (runs EVERY frame for smooth animation) ---
-    lineIntensity += (brightnessLevel - lineIntensity) * 0.05;
-    let lineIdx = 0;
+    lineIdx = 0;
     const toDelete = [];
     for (const [ck, entry] of connFade) {
       if (!entry.frozen && (entry.a.dead || entry.b.dead)) {
@@ -2883,13 +4506,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
     for (const ck of toDelete) connFade.delete(ck);
-    const lineVertCount = lineIdx / 3;
+    lineVertCount = lineIdx / 3;
+    } // end if (!WEBGPU_RENDER) — CPU connection code
 
     // ==================================================================
     // CPU PHYSICS LOOP (only when !GPU_PHYSICS and !WEBGPU_ACTIVE)
     // ==================================================================
     let activeCount = 0;
-    if (WEBGPU_ACTIVE) {
+    if (WEBGPU_RENDER) {
+      activeCount = aliveCount || (gpuWatermark - gpuFreeSlots.length);
+    } else if (WEBGPU_ACTIVE) {
       activeCount = gpuRenderCount || 0;
     } else if (!GPU_PHYSICS) {
       let pIdx = 0;
@@ -2989,8 +4615,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     // ==================================================================
-    // RENDER
+    // RENDER (WebGL2 — skipped when WebGPU renders directly)
     // ==================================================================
+    if (!WEBGPU_RENDER) {
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     // Draw lines (behind particles)
@@ -3028,16 +4655,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
 
     gl.bindVertexArray(null);
+    } // end if (!WEBGPU_RENDER) — WebGL2 render
 
     if (SHOW_RIPPLE_RADIUS && RIPPLE_INNER_RADIUS > 0) {
-      const elapsed = rippleClickTime > 0 ? (now - rippleClickTime) / 1000 : 0;
-      const fadeOpacity = rippleClickTime > 0 ? Math.min(1, Math.max(0, (elapsed - 6) / 5)) : 0;
-      if (fadeOpacity > 0) {
+      if (!radiusLocked) {
+        const elapsed = rippleClickTime > 0 ? (now - rippleClickTime) / 1000 : 0;
+        radiusFadeOpacity = rippleClickTime > 0 ? Math.min(1, Math.max(0, (elapsed - 7) / 5)) : 0;
+        if (radiusFadeOpacity >= 1) radiusLocked = true;
+      }
+      if (radiusFadeOpacity > 0) {
         const canRect = canvas.getBoundingClientRect();
         const scalePx = canRect.width / w;
         const radiusPx = RIPPLE_INNER_RADIUS * scalePx;
         rippleRadiusOverlay.style.display = 'block';
-        rippleRadiusOverlay.style.opacity = `${fadeOpacity}`;
+        rippleRadiusOverlay.style.opacity = `${radiusFadeOpacity}`;
         rippleRadiusOverlay.style.width = `${radiusPx * 2}px`;
         rippleRadiusOverlay.style.height = `${radiusPx * 2}px`;
         rippleRadiusOverlay.style.left = `${(btnCX / w) * canRect.width}px`;
@@ -3072,7 +4703,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         for (let i = 0; i < ftAvgCount; i++) ftAvgSum += ftAvgBuf[i];
         ftAvgEl.textContent = `${Math.round(ftAvgSum / ftAvgCount)}%`;
         const burstCount = aliveCount - autoCount;
-        debugConnCountEl.textContent = `Active conn: ${Math.round(lineVertCount / 2)}`;
+        debugConnCountEl.textContent = `Active conn: ${WEBGPU_RENDER ? gpuLineCount : Math.round(lineVertCount / 2)}`;
         autoStat.statValueEl.textContent = `${autoCount}`;
         burstStat.statValueEl.textContent = `${burstCount}`;
         totalStat.statValueEl.textContent = `${aliveCount}`;
@@ -3200,6 +4831,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, cpuReadback.subarray(0, highWater * FPP));
         gl.bindBuffer(gl.ARRAY_BUFFER, tfBuf[1]);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, cpuReadback.subarray(0, highWater * FPP));
+      } else if (WEBGPU_RENDER) {
+        // Let the GPU physics shader handle rescaling on next frame
+        gpuResizeScaleX = sx;
+        gpuResizeScaleY = sy;
       } else if (WEBGPU_ACTIVE) {
         for (let i = 0; i < gpuWatermark; i++) {
           if (gpuSlots[i].dead) continue;
