@@ -82,15 +82,15 @@ const HERO_DEBUG_DEFAULTS = {
   rippleBase: 20,
   rippleVariance: 2,
   rippleInnerRadius: 400,
-  brightnessAttack: 0.14,
-  brightnessRelease: 0.14,
+  brightnessAttack: 0.1,
+  brightnessRelease: 0.1,
   spinAttack: 0.6,
   spinRelease: 0.46,
   connDist: 170,
   maxConn: 3,
-  connSkip: 5,
-  whiteParticlePct: 15,
-  whiteBrightnessCap: 60,
+  connSkip: 10,
+  whiteParticlePct: 20,
+  whiteBrightnessCap: 75,
   swirlForce: 0.065,
   pullForce: 0.012,
   friction: 0.98,
@@ -142,7 +142,9 @@ let LOW_SPEED = clampLowSpeed(
 let HIGH_SPEED = clampHighSpeed(localStorage.getItem('sonara_highSpeed') ?? 1.5);
 let SPEED_CLAMP = clampSpeedClamp(localStorage.getItem('sonara_speedClamp') ?? 1.0);
 let SPEED_PERIOD = clampSpeedPeriod(localStorage.getItem('sonara_speedPeriod') || 80);
-let CONN_KILL_ALPHA = +(localStorage.getItem('sonara_connKillAlpha') || 0.01);
+let CONN_KILL_ALPHA = +(localStorage.getItem('sonara_connKillAlpha') || 0.02);
+let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
+let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return HERO_DEBUG_DEFAULTS.whiteParticlePct;
@@ -292,6 +294,7 @@ function initHeroCanvas() {
     speedClamp: SPEED_CLAMP,
     speedPeriod: SPEED_PERIOD,
     connKillAlpha: Number(CONN_KILL_ALPHA.toFixed(3)),
+    fadeUpSecs: FADE_UP_SECS,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
     friction: Number(FRICTION.toFixed(3)),
@@ -643,6 +646,23 @@ function initHeroCanvas() {
     const connKillPair = appendDebugPair(debugThirdRow, 'Kill α:', ckSel);
     connKillPair.firstChild.style.color = '#c084fc';
 
+    const ffSel = document.createElement('select');
+    ffSel.style.cssText = `${DEBUG_SELECT_STYLE};color:#c084fc`;
+    for (let v = 0; v <= 10; v += 0.5) {
+      const opt = document.createElement('option');
+      opt.value = String(v);
+      opt.textContent = `${v}s${v === 1 ? ' ★' : ''}`;
+      if (v === FADE_UP_SECS) opt.selected = true;
+      ffSel.appendChild(opt);
+    }
+    ffSel.addEventListener('change', () => {
+      FADE_UP_SECS = +ffSel.value;
+      FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
+      localStorage.setItem('sonara_fadeUpSecs', String(FADE_UP_SECS));
+    });
+    const fadePair = appendDebugPair(debugThirdRow, 'FadeUp:', ffSel);
+    fadePair.firstChild.style.color = '#c084fc';
+
   }
 
   // FPS + frame budget display (own row, left-aligned)
@@ -834,7 +854,7 @@ function initHeroCanvas() {
         copyBtn.disabled = false;
       }, 1200);
     });
-    debugTopRow.appendChild(copyBtn);
+    debugPerfRow.appendChild(copyBtn);
   }
   if (isLocal) {
     canvas.parentElement.appendChild(debugBar);
@@ -1517,7 +1537,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let audioBoost = select(0.0, br * (0.8 + sin(u.time * 3.7 + p.phase * 2.0) * 0.3), br > 0.001);
   let rng1 = hash2d(vec2f(p.x + u.seed, p.y + u.time));
   let tremble = select(0.0, (rng1 - 0.5) * 0.12 * br, br > 0.001);
-  let currentAlpha = min(1.0, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * u.heroBrightness);
+  let currentAlpha = min(1.0, (p.alpha * (0.5 + wave * 0.5) + audioBoost * 1.5 + tremble) * fadeIn * u.heroBrightness);
   let currentR = p.r * (0.8 + wave * 0.4) * (1.0 + audioBoost * 0.5);
   let currentSize = max(3.0, currentR * 6.0);
 
@@ -1795,7 +1815,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         initData[off + 5]  = alpha;
         initData[off + 6]  = Math.random() * 2 + 0.5;      // r
         initData[off + 7]  = 0;  // age
-        initData[off + 8]  = 120;  // fadeIn
+        initData[off + 8]  = FADE_FRAMES;  // fadeIn
         initData[off + 9]  = 0;  // life (0 = auto-particle)
         initData[off + 10] = 0;  // decay
         initData[off + 11] = 0;  // baseAlpha
@@ -2022,7 +2042,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           tmp[5] = Math.random() * 0.4 + 0.1;   // alpha
           tmp[6] = Math.random() * 2 + 0.5;      // r
           tmp[7] = 0; // age
-          tmp[8] = 120; tmp[9] = 0; tmp[10] = 0; tmp[11] = 0; // fadeIn, life, decay, baseAlpha
+          tmp[8] = FADE_FRAMES; tmp[9] = 0; tmp[10] = 0; tmp[11] = 0; // fadeIn, life, decay, baseAlpha
           tmp[12] = 0.3 + Math.random() * 0.7; // reactivity
           tmp[13] = RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR;
           tmp[14] = s.canWhiten ? 1 : 0;
@@ -2141,7 +2161,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           if (s.canWhiten) {
             const spd = Math.sqrt(pvx * pvx + pvy * pvy);
             const density = neighborCount[i] / MAX_CONN;
-            wt = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4);
+            wt = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.7);
           }
           particleData[pIdx++] = px;
           particleData[pIdx++] = py;
@@ -2204,7 +2224,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           phase: Math.random() * Math.PI * 2,
           alpha: Math.random() * 0.4 + 0.1,
           r: Math.random() * 2 + 0.5,
-          age: 0, fadeIn: 120,
+          age: 0, fadeIn: FADE_FRAMES,
           life: 0, decay: 0, baseAlpha: 0,
           reactivity: 0,
           rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR
@@ -2339,7 +2359,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           x: Math.random() * w, y: Math.random() * h,
           vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
           r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1,
-          phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120,
+          phase: Math.random() * Math.PI * 2, age: 0, fadeIn: FADE_FRAMES,
           rippleSpeed: RIPPLE_SPEED_BASE + Math.random() * RIPPLE_SPEED_VAR,
           canWhiten: Math.random() < getWhiteParticleChance()
         });
@@ -2524,7 +2544,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         const br = brightnessLocal * react;
         const audioBoost = br > 0.001 ? br * (0.8 + fastSin(time * 3.7 + p.phase * 2) * 0.3) : 0;
         const tremble = br > 0.001 ? (Math.random() - 0.5) * 0.12 * br : 0;
-        const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5 + tremble) * HERO_PARTICLE_BRIGHTNESS);
+        const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) + audioBoost * 1.5 + tremble) * fadeIn * HERO_PARTICLE_BRIGHTNESS);
         const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
 
         // Fill GPU buffer — color shift from speed + local density
@@ -2532,7 +2552,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         if (p.canWhiten) {
           const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
           const density = neighborCount[i] / MAX_CONN;
-          wt = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.4);
+          wt = Math.min(1, Math.max(0, (spd - 0.3) * 0.9) + density * 0.7);
         }
         particleData[pIdx++] = p.x;
         particleData[pIdx++] = p.y;
@@ -2645,15 +2665,22 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     gl.bindVertexArray(null);
 
     if (SHOW_RIPPLE_RADIUS && RIPPLE_INNER_RADIUS > 0) {
-      const canRect = canvas.getBoundingClientRect();
-      const scalePx = canRect.width / w;
-      const radiusPx = RIPPLE_INNER_RADIUS * scalePx;
-      rippleRadiusOverlay.style.display = 'block';
-      rippleRadiusOverlay.style.opacity = '1';
-      rippleRadiusOverlay.style.width = `${radiusPx * 2}px`;
-      rippleRadiusOverlay.style.height = `${radiusPx * 2}px`;
-      rippleRadiusOverlay.style.left = `${(btnCX / w) * canRect.width}px`;
-      rippleRadiusOverlay.style.top = `${(btnCY / h) * canRect.height}px`;
+      const elapsed = rippleClickTime > 0 ? (now - rippleClickTime) / 1000 : 0;
+      const fadeOpacity = rippleClickTime > 0 ? Math.min(1, Math.max(0, (elapsed - 5) / 5)) : 0;
+      if (fadeOpacity > 0) {
+        const canRect = canvas.getBoundingClientRect();
+        const scalePx = canRect.width / w;
+        const radiusPx = RIPPLE_INNER_RADIUS * scalePx;
+        rippleRadiusOverlay.style.display = 'block';
+        rippleRadiusOverlay.style.opacity = `${fadeOpacity}`;
+        rippleRadiusOverlay.style.width = `${radiusPx * 2}px`;
+        rippleRadiusOverlay.style.height = `${radiusPx * 2}px`;
+        rippleRadiusOverlay.style.left = `${(btnCX / w) * canRect.width}px`;
+        rippleRadiusOverlay.style.top = `${(btnCY / h) * canRect.height}px`;
+      } else {
+        rippleRadiusOverlay.style.display = 'none';
+        rippleRadiusOverlay.style.opacity = '0';
+      }
     } else {
       rippleRadiusOverlay.style.display = 'none';
       rippleRadiusOverlay.style.opacity = '0';
@@ -2922,7 +2949,7 @@ function initHeroCanvas2D() {
     const audioRate2d = 0.15 + 0.4 * (1 - fillRatio2d);
     const spawnRate = activityLevel > 0.01 ? audioRate2d * 2 : 0.15;
     if (particles.length < 2000 && Math.random() < spawnRate) {
-      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: 120, canWhiten: Math.random() < getWhiteParticleChance() });
+      particles.push({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4, r: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1, phase: Math.random() * Math.PI * 2, age: 0, fadeIn: FADE_FRAMES, canWhiten: Math.random() < getWhiteParticleChance() });
     }
     const CELL = 140, cols = Math.ceil(w / CELL) + 1, grid = new Map();
     for (let i = 0; i < particles.length; i++) { const p = particles[i]; const key = ((p.x / CELL) | 0) + ((p.y / CELL) | 0) * cols; const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]); }
@@ -2944,7 +2971,7 @@ function initHeroCanvas2D() {
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i], wave = fastSin(time * 2 + p.phase) * 0.5 + 0.5, fadeIn = p.fadeIn !== undefined ? Math.min(1, p.age / p.fadeIn) : 1, react = p.reactivity || 0;
       const audioBoost = brightnessLevel * react * (0.8 + fastSin(time * 3.7 + p.phase * 2) * 0.3);
-      const currentAlpha = Math.min(1, p.alpha * (0.5 + wave * 0.5) * fadeIn + audioBoost * 1.5);
+      const currentAlpha = Math.min(1, (p.alpha * (0.5 + wave * 0.5) + audioBoost * 1.5) * fadeIn);
       const currentR = p.r * (0.8 + wave * 0.4) * (1 + audioBoost * 0.5);
       let pr = HERO_GOLD_RGB.r * 255, pg = HERO_GOLD_RGB.g * 255, pb = HERO_GOLD_RGB.b * 255;
       if (p.canWhiten) {
