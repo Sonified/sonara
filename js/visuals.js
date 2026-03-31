@@ -150,6 +150,7 @@ let CONN_KILL_ALPHA = +(localStorage.getItem('sonara_connKillAlpha') || 0.02);
 let CONN_FADE_IN = +(localStorage.getItem('sonara_connFadeIn') || 0.04);
 let CONN_FADE_OUT = +(localStorage.getItem('sonara_connFadeOut') || 0.025);
 let LINE_BASE = +(localStorage.getItem('sonara_lineBase') || 0.08);
+let SUPER_CONN = localStorage.getItem('sonara_superConn') === '1';
 let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
 let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
@@ -335,6 +336,7 @@ function initHeroCanvas() {
     connFadeIn: Number(CONN_FADE_IN.toFixed(3)),
     connFadeOut: Number(CONN_FADE_OUT.toFixed(3)),
     lineBase: Number(LINE_BASE.toFixed(2)),
+    superConn: SUPER_CONN,
     fadeUpSecs: FADE_UP_SECS,
     swirlForce: Number(SWIRL_FORCE.toFixed(3)),
     pullForce: Number(PULL_FORCE.toFixed(3)),
@@ -605,6 +607,17 @@ function initHeroCanvas() {
     cSel.addEventListener('change', () => { MAX_CONN = +cSel.value; localStorage.setItem('sonara_maxConn', MAX_CONN); });
     const connPair = appendDebugPair(debugConnRow, 'Conn:', cSel);
     connPair.firstChild.style.color = '#e4bc58';
+
+    const scToggle = document.createElement('input');
+    scToggle.type = 'checkbox';
+    scToggle.checked = SUPER_CONN;
+    scToggle.style.cssText = 'margin:0;accent-color:#e4bc58';
+    scToggle.addEventListener('change', () => {
+      SUPER_CONN = scToggle.checked;
+      localStorage.setItem('sonara_superConn', SUPER_CONN ? '1' : '0');
+    });
+    const scPair = appendDebugPair(debugConnRow, 'Superconn:', scToggle);
+    scPair.firstChild.style.color = '#e4bc58';
 
     const dSel = document.createElement('select');
     dSel.style.cssText = DEBUG_CONN_SELECT_STYLE;
@@ -2048,6 +2061,8 @@ struct ConnUniforms {
   particleCount: u32,
   maxConnSlots: u32,
   lineBase: f32,
+  superConn: u32,
+  _pad1: u32, _pad2: u32, _pad3: u32,
 };
 
 @group(0) @binding(0) var<storage, read> pOut: array<POut>;
@@ -2171,6 +2186,8 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
   let cyi = u32(max(0.0, yi) / cu.cellSize);
 
   let aiBrightBoost = 1.0 + cu.lineIntensity * 2.0;
+  // SuperConn: cache i's count once (like the old CPU bug that created super-connectors)
+  let iCountCached = atomicLoad(&auxPool[i + NCNT_OFF]);
 
   for (var dy: i32 = -1; dy <= 1; dy++) {
     for (var dx: i32 = -1; dx <= 1; dx++) {
@@ -2186,7 +2203,8 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
         let flagsJ = pOut[j].flags;
         if ((flagsJ & 1u) != 0u) { continue; }
         if (isBurstI && (flagsJ & 2u) != 0u) { continue; }
-        if (atomicLoad(&auxPool[i + NCNT_OFF]) >= cu.maxConn || atomicLoad(&auxPool[j + NCNT_OFF]) >= cu.maxConn) { continue; }
+        let iCount = select(atomicLoad(&auxPool[i + NCNT_OFF]), iCountCached, cu.superConn == 1u);
+        if (iCount >= cu.maxConn || atomicLoad(&auxPool[j + NCNT_OFF]) >= cu.maxConn) { continue; }
         let ddx = xi - pOut[j].x;
         let ddy = yi - pOut[j].y;
         let d2 = ddx * ddx + ddy * ddy;
@@ -2394,6 +2412,8 @@ struct ConnUniforms {
   particleCount: u32,
   maxConnSlots: u32,
   lineBase: f32,
+  superConn: u32,
+  _pad1: u32, _pad2: u32, _pad3: u32,
 };
 
 @group(0) @binding(0) var<storage, read> pOut: array<POut>;
@@ -2518,6 +2538,7 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
   let cyi = u32(max(0.0, yi) / cu.cellSize);
 
   let aiBrightBoost = 1.0 + cu.lineIntensity * 2.0;
+  let iCountCached = atomicLoad(&neighborCount[i]);
 
   for (var dy: i32 = -1; dy <= 1; dy++) {
     for (var dx: i32 = -1; dx <= 1; dx++) {
@@ -2533,7 +2554,8 @@ fn connSearch(@builtin(global_invocation_id) gid: vec3u) {
         let flagsJ = pOut[j].flags;
         if ((flagsJ & 1u) != 0u) { continue; }
         if (isBurstI && (flagsJ & 2u) != 0u) { continue; }
-        if (atomicLoad(&neighborCount[i]) >= cu.maxConn || atomicLoad(&neighborCount[j]) >= cu.maxConn) { continue; }
+        let iCount = select(atomicLoad(&neighborCount[i]), iCountCached, cu.superConn == 1u);
+        if (iCount >= cu.maxConn || atomicLoad(&neighborCount[j]) >= cu.maxConn) { continue; }
         let ddx = xi - pOut[j].x;
         let ddy = yi - pOut[j].y;
         let d2 = ddx * ddx + ddy * ddy;
@@ -3225,7 +3247,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       size: MAX_CONN_SLOTS * 6 * (gpuHasF16 ? 2 : 4),
       usage: GPUBufferUsage.STORAGE,
     });
-    const CONN_UNIFORM_SIZE = 64;
+    const CONN_UNIFORM_SIZE = 80;
     gpuConnUniformBuf = device.createBuffer({
       size: CONN_UNIFORM_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -3971,7 +3993,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
         const CELL = CONN_REACH;
         const gridCols = Math.ceil(w / CELL) + 1;
         const gridRows = Math.ceil(h / CELL) + 1;
-        const connUniformData = new Float32Array(16);
+        const connUniformData = new Float32Array(20);
         const connUniformU32 = new Uint32Array(connUniformData.buffer);
         connUniformData[0] = CONN_REACH_SQ;
         connUniformData[1] = CONN_FADE_START_SQ;
@@ -3989,6 +4011,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
         connUniformU32[13] = gpuWatermark;
         connUniformU32[14] = MAX_CONN_SLOTS;
         connUniformData[15] = LINE_BASE;
+        connUniformU32[16] = SUPER_CONN ? 1 : 0;
         gpuDevice.queue.writeBuffer(gpuConnUniformBuf, 0, connUniformData);
 
         // Reset atomic counters: [0]=line count, [1]=free list count
