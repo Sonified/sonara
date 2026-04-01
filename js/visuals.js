@@ -151,9 +151,10 @@ let CONN_FADE_IN = +(localStorage.getItem('sonara_connFadeIn') || 0.04);
 let CONN_FADE_OUT = +(localStorage.getItem('sonara_connFadeOut') || 0.025);
 let LINE_BASE = +(localStorage.getItem('sonara_lineBase') || 0.08);
 let SUPER_CONN = localStorage.getItem('sonara_superConn') === '1';
-let GATHER_SELECT = localStorage.getItem('sonara_gatherSelect') === '1';
+let GATHER_SELECT = localStorage.getItem('sonara_gatherSelect') !== '0';
 let DUAL_CHECK = localStorage.getItem('sonara_dualCheck') === '1';
 let ONE_OWNER = localStorage.getItem('sonara_oneOwner') === '1';
+let BOUNCE_LR = localStorage.getItem('sonara_bounceLR') !== '0';
 let FADE_UP_SECS = +(localStorage.getItem('sonara_fadeUpSecs') || 1);
 let FADE_FRAMES = Math.round(FADE_UP_SECS * 120);
 function clampWhiteParticlePct(value) {
@@ -274,7 +275,7 @@ function initHeroCanvas() {
   const _savedMax = localStorage.getItem('sonara_maxParticles');
   let SEED_PARTICLES = _savedSeed ? +_savedSeed : (isMobileView ? HERO_DEBUG_DEFAULTS.seedParticles.mobile : HERO_DEBUG_DEFAULTS.seedParticles.desktop);
   let MAX_PARTICLES = _savedMax ? +_savedMax : (isMobileView ? HERO_DEBUG_DEFAULTS.maxParticles.mobile : HERO_DEBUG_DEFAULTS.maxParticles.desktop);
-  const MAX_PER_CELL = 1 << Math.ceil(Math.log2(Math.max(1, Math.ceil(MAX_PARTICLES / 10))));
+  const MAX_PER_CELL = 1 << Math.round(Math.log2(Math.max(1, Math.ceil(MAX_PARTICLES / 10))));
   SEED_PARTICLES = Math.min(SEED_PARTICLES, MAX_PARTICLES);
   let THROTTLE_START = Math.round(MAX_PARTICLES * 0.8);
   const getSeedCount = () => Math.min(SEED_PARTICLES, MAX_PARTICLES);
@@ -349,6 +350,7 @@ function initHeroCanvas() {
     pullForce: Number(PULL_FORCE.toFixed(3)),
     friction: Number(FRICTION.toFixed(3)),
     swirlCenter: swirlCenterTarget,
+    bounceLR: BOUNCE_LR,
   });
   const heroVis = trackVisibility('hero');
 
@@ -639,6 +641,7 @@ function initHeroCanvas() {
     });
     const gsPair = appendDebugPair(debugConnRow, 'GatherSel:', gsToggle);
     gsPair.firstChild.style.color = '#e4bc58';
+
 
     const dcToggle = document.createElement('input');
     dcToggle.type = 'checkbox';
@@ -1041,6 +1044,18 @@ function initHeroCanvas() {
     scSel.addEventListener('change', () => { swirlCenterTarget = scSel.value; localStorage.setItem('sonara_swirlCenter', swirlCenterTarget); });
     appendDebugPair(debugTopRow, 'Center:', scSel);
 
+    const blrSel = document.createElement('select');
+    blrSel.style.cssText = DEBUG_SELECT_STYLE;
+    [{label: 'On', value: '1'}, {label: 'Off', value: '0'}].forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      if ((BOUNCE_LR ? '1' : '0') === o.value) opt.selected = true;
+      blrSel.appendChild(opt);
+    });
+    blrSel.addEventListener('change', () => { BOUNCE_LR = blrSel.value === '1'; localStorage.setItem('sonara_bounceLR', BOUNCE_LR ? '1' : '0'); });
+    appendDebugPair(debugTopRow, 'BounceLR:', blrSel);
+
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.textContent = 'Copy JSON';
@@ -1192,6 +1207,7 @@ function initHeroCanvas() {
     uniform float u_heroPlaying;
     uniform float u_friction;
     uniform float u_rippleInnerRadius;
+    uniform float u_bounceLR;
 
     uniform sampler2D u_rippleTex;
 
@@ -1326,9 +1342,14 @@ function initHeroCanvas() {
       vx *= u_friction;
       vy *= u_friction;
 
-      // Edge wrapping (horizontal wrap, vertical mirror-bounce)
-      if (x < 0.0) x = u_resolution.x;
-      else if (x > u_resolution.x) x = 0.0;
+      // Edge wrapping (horizontal wrap or bounce, vertical mirror-bounce)
+      if (u_bounceLR > 0.5) {
+        if (x < 0.0) { x = 0.0; y = u_resolution.y - y; vx = abs(vx); }
+        else if (x > u_resolution.x) { x = u_resolution.x; y = u_resolution.y - y; vx = -abs(vx); }
+      } else {
+        if (x < 0.0) x = u_resolution.x;
+        else if (x > u_resolution.x) x = 0.0;
+      }
       if (y < 0.0) {
         y = 0.0;
         x = u_resolution.x - x;
@@ -1506,6 +1527,7 @@ function initHeroCanvas() {
       u_heroPlaying:    gl.getUniformLocation(tfUpdateProg, 'u_heroPlaying'),
       u_friction:       gl.getUniformLocation(tfUpdateProg, 'u_friction'),
       u_rippleInnerRadius: gl.getUniformLocation(tfUpdateProg, 'u_rippleInnerRadius'),
+      u_bounceLR:       gl.getUniformLocation(tfUpdateProg, 'u_bounceLR'),
       u_rippleTex:      gl.getUniformLocation(tfUpdateProg, 'u_rippleTex'),
     };
 
@@ -1675,7 +1697,7 @@ struct Uniforms {
   heroBrightness: f32,
   seed: f32,
   particleCount: u32,
-  scaleX: f32, scaleY: f32, _pad3: u32, _pad4: u32, _pad5: u32,
+  scaleX: f32, scaleY: f32, bounceLR: u32, _pad4: u32, _pad5: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -1811,8 +1833,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   // Edge wrapping
   var wrapped = false;
-  if (p.x < 0.0) { p.x = u.w; wrapped = true; }
-  else if (p.x > u.w) { p.x = 0.0; wrapped = true; }
+  if (u.bounceLR != 0u) {
+    if (p.x < 0.0) { p.x = 0.0; p.y = u.h - p.y; p.vx = abs(p.vx); wrapped = true; }
+    else if (p.x > u.w) { p.x = u.w; p.y = u.h - p.y; p.vx = -abs(p.vx); wrapped = true; }
+  } else {
+    if (p.x < 0.0) { p.x = u.w; wrapped = true; }
+    else if (p.x > u.w) { p.x = 0.0; wrapped = true; }
+  }
   if (p.y < 0.0) { p.y = 0.0; p.x = u.w - p.x; p.vy = abs(p.vy); wrapped = true; }
   else if (p.y > u.h) { p.y = u.h; p.x = u.w - p.x; p.vy = -abs(p.vy); wrapped = true; }
 
@@ -1869,7 +1896,7 @@ struct Uniforms {
   heroBrightness: f32,
   seed: f32,
   particleCount: u32,
-  scaleX: f32, scaleY: f32, _pad3: u32, _pad4: u32, _pad5: u32,
+  scaleX: f32, scaleY: f32, bounceLR: u32, _pad4: u32, _pad5: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
@@ -2023,8 +2050,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   // Edge wrapping
   var wrapped = false;
-  if (p.x < 0.0) { p.x = u.w; wrapped = true; }
-  else if (p.x > u.w) { p.x = 0.0; wrapped = true; }
+  if (u.bounceLR != 0u) {
+    if (p.x < 0.0) { p.x = 0.0; p.y = u.h - p.y; vx = abs(vx); wrapped = true; }
+    else if (p.x > u.w) { p.x = u.w; p.y = u.h - p.y; vx = -abs(vx); wrapped = true; }
+  } else {
+    if (p.x < 0.0) { p.x = u.w; wrapped = true; }
+    else if (p.x > u.w) { p.x = 0.0; wrapped = true; }
+  }
   if (p.y < 0.0) { p.y = 0.0; p.x = u.w - p.x; vy = abs(vy); wrapped = true; }
   else if (p.y > u.h) { p.y = u.h; p.x = u.w - p.x; vy = -abs(vy); wrapped = true; }
 
@@ -4542,6 +4574,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       gpuUniformU32[18] = gpuWatermark;
       gpuUniformF32[19] = gpuResizeScaleX;
       gpuUniformF32[20] = gpuResizeScaleY;
+      gpuUniformU32[21] = BOUNCE_LR ? 1 : 0;
       gpuResizeScaleX = 1.0;
       gpuResizeScaleY = 1.0;
 
@@ -4722,7 +4755,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
             gpuDevice.queue.submit([commandEncoder.finish()]);
             const wgCells = Math.ceil((gridCols * gridRows) / 256);
             const roundNumBuf = new Uint32Array(1);
-            for (let round = 0; round < 15; round++) {
+            for (let round = 0; round < SKIP_TARGET_AT; round++) {
               roundNumBuf[0] = round;
               gpuDevice.queue.writeBuffer(gpuConnUniformBuf, 18 * 4, roundNumBuf);
               const roundEncoder = gpuDevice.createCommandEncoder();
@@ -5023,6 +5056,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       gl.uniform1f(tfLoc.u_heroPlaying, heroAudioPlaying ? 1.0 : 0.0);
       gl.uniform1f(tfLoc.u_friction, FRICTION);
       gl.uniform1f(tfLoc.u_rippleInnerRadius, RIPPLE_INNER_RADIUS);
+      gl.uniform1f(tfLoc.u_bounceLR, BOUNCE_LR ? 1.0 : 0.0);
       gl.uniform1i(tfLoc.u_rippleTex, 0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -5429,8 +5463,13 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 
         // Edge wrapping
         let wrapped = false;
-        if (p.x < 0) { p.x = w; wrapped = true; }
-        else if (p.x > w) { p.x = 0; wrapped = true; }
+        if (BOUNCE_LR) {
+          if (p.x < 0) { p.x = 0; p.y = h - p.y; p.vx = Math.abs(p.vx); wrapped = true; }
+          else if (p.x > w) { p.x = w; p.y = h - p.y; p.vx = -Math.abs(p.vx); wrapped = true; }
+        } else {
+          if (p.x < 0) { p.x = w; wrapped = true; }
+          else if (p.x > w) { p.x = 0; wrapped = true; }
+        }
         if (p.y < 0) { p.y = 0; p.x = w - p.x; p.vy = Math.abs(p.vy); wrapped = true; }
         else if (p.y > h) { p.y = h; p.x = w - p.x; p.vy = -Math.abs(p.vy); wrapped = true; }
         if (wrapped) {
