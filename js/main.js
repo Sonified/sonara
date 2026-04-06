@@ -4,10 +4,20 @@
  */
 
 import { play, stop, killNow, seqRestart, seqSilence, getEndTime, now as audioNow, getStemPattern, generateStemPattern, setStemPattern, setSeqLoop, getSeqLoop, setSeqDelay, getSeqDelay, setSeqReverb, getSeqReverb, getHeroAnalyser, getHeroProgress, setOnAudioDeviceLost, setOnAudioDeviceRecovered } from './audio.js?v=9';
-import { initVisuals } from './visuals.js?v=28';
+import { initVisuals, onVisualsPause, onVisualsResume, onVisualsThrottle } from './visuals.js?v=28';
 
 (function() {
   'use strict';
+
+  // Shared throttle state — set by visuals.js blur/focus hooks
+  let _mainThrottled = false;
+  let _mainSkip = false;
+  onVisualsThrottle((on) => { _mainThrottled = on; _mainSkip = false; });
+  function shouldSkip() {
+    if (!_mainThrottled) return false;
+    _mainSkip = !_mainSkip;
+    return _mainSkip;
+  }
 
   let pointerFocusLock = null;
 
@@ -75,14 +85,18 @@ import { initVisuals } from './visuals.js?v=28';
     mouseY = e.clientY;
   });
 
+  let glowRaf = 0;
   function animateGlow() {
+    glowRaf = requestAnimationFrame(animateGlow);
+    if (shouldSkip()) return;
     glowX += (mouseX - glowX) * 0.06;
     glowY += (mouseY - glowY) * 0.06;
     cursorGlow.style.left = glowX + 'px';
     cursorGlow.style.top = glowY + 'px';
-    requestAnimationFrame(animateGlow);
   }
-  animateGlow();
+  glowRaf = requestAnimationFrame(animateGlow);
+  onVisualsPause(() => { if (glowRaf) { cancelAnimationFrame(glowRaf); glowRaf = 0; } });
+  onVisualsResume(() => { if (!glowRaf) glowRaf = requestAnimationFrame(animateGlow); });
 
   if ('ontouchstart' in window) {
     cursorGlow.style.display = 'none';
@@ -115,6 +129,40 @@ import { initVisuals } from './visuals.js?v=28';
   }
 
   let lastScrollY = window.scrollY;
+  let currentSlide = 0;
+
+  let scrollAnim = null;
+  function goToSlide(idx) {
+    idx = Math.max(0, Math.min(allSections.length - 1, idx));
+    currentSlide = idx;
+    if (scrollAnim) cancelAnimationFrame(scrollAnim);
+    const target = allSections[idx].offsetTop;
+    const start = window.scrollY;
+    const dist = target - start;
+    if (Math.abs(dist) < 1) return;
+    const duration = 400;
+    document.documentElement.style.scrollSnapType = 'none';
+    document.documentElement.style.scrollBehavior = 'auto';
+    const t0 = performance.now();
+    window.scrollTo(0, start + dist * 0.02); // immediate nudge
+    function step() {
+      const elapsed = performance.now() - t0;
+      const p = Math.min(1, elapsed / duration);
+      const ease = p < 0.5 ? 2 * p * p : 1 - 2 * (1 - p) * (1 - p);
+      window.scrollTo(0, start + dist * ease);
+      if (p < 1) {
+        scrollAnim = requestAnimationFrame(step);
+      } else {
+        scrollAnim = null;
+        document.documentElement.style.scrollSnapType = '';
+        document.documentElement.style.scrollBehavior = 'smooth';
+      }
+    }
+    scrollAnim = requestAnimationFrame(step);
+    dotNav.querySelectorAll('button').forEach((d, i) => {
+      d.classList.toggle('active', i === idx);
+    });
+  }
 
   const dotNav = document.createElement('nav');
   dotNav.className = 'dot-nav';
@@ -139,6 +187,7 @@ import { initVisuals } from './visuals.js?v=28';
   }
 
   const initialActiveIdx = getClosestSectionIdx();
+  currentSlide = initialActiveIdx;
 
   allSections.forEach((section, i) => {
     const dot = document.createElement('button');
@@ -151,7 +200,7 @@ import { initVisuals } from './visuals.js?v=28';
     dot.appendChild(tooltip);
 
     dot.addEventListener('click', () => {
-      section.scrollIntoView({ behavior: 'smooth' });
+      goToSlide(i);
     });
     dotNav.appendChild(dot);
   });
@@ -175,9 +224,12 @@ import { initVisuals } from './visuals.js?v=28';
 
         const idx = allSections.indexOf(entry.target);
         if (idx >= 0) {
-          dotNav.querySelectorAll('button').forEach((d, i) => {
-            d.classList.toggle('active', i === idx);
-          });
+          if (!scrollAnim) {
+            currentSlide = idx;
+            dotNav.querySelectorAll('button').forEach((d, i) => {
+              d.classList.toggle('active', i === idx);
+            });
+          }
           // Let the current snap settle, then preload only the next section.
           scheduleNeighborPreload(entry.target, idx);
         }
@@ -511,7 +563,10 @@ import { initVisuals } from './visuals.js?v=28';
     const heroRmsData = new Uint8Array(128);
     let smoothAlpha = 0;
     let lastPPct = '0';
-    (function heroShimmer() {
+    let shimmerRaf = 0;
+    function heroShimmer() {
+      shimmerRaf = requestAnimationFrame(heroShimmer);
+      if (shouldSkip()) return;
       const analyser = getHeroAnalyser();
       if (analyser && heroBtn.classList.contains('playing')) {
         analyser.getByteTimeDomainData(heroRmsData);
@@ -539,8 +594,10 @@ import { initVisuals } from './visuals.js?v=28';
           heroBtn.style.background = `linear-gradient(to right, rgba(212,168,67,${smoothAlpha}) ${lastPPct}%, transparent ${lastPPct}%), rgba(6,6,8,0.5)`;
         }
       }
-      requestAnimationFrame(heroShimmer);
-    })();
+    }
+    shimmerRaf = requestAnimationFrame(heroShimmer);
+    onVisualsPause(() => { if (shimmerRaf) { cancelAnimationFrame(shimmerRaf); shimmerRaf = 0; } });
+    onVisualsResume(() => { if (!shimmerRaf) shimmerRaf = requestAnimationFrame(heroShimmer); });
   }
 
   // ===== Scroll Hint Fade =====
@@ -805,8 +862,12 @@ import { initVisuals } from './visuals.js?v=28';
       return;
     }
     if (['ArrowDown', 'PageDown'].includes(e.key)) {
+      e.preventDefault();
+      goToSlide(currentSlide + 1);
       startCueFade('down');
     } else if (['ArrowUp', 'PageUp'].includes(e.key)) {
+      e.preventDefault();
+      goToSlide(currentSlide - 1);
       startCueFade('up');
     }
   });
@@ -975,6 +1036,8 @@ import { initVisuals } from './visuals.js?v=28';
   }
 
   function animateSequencer() {
+    seqRaf = requestAnimationFrame(animateSequencer);
+    if (shouldSkip()) return;
     const pattern = getStemPattern();
     if (pattern && seqPlaying && seqCells.length) {
       const elapsed = audioNow() - pattern.startTime;
@@ -1006,9 +1069,10 @@ import { initVisuals } from './visuals.js?v=28';
       });
       if (seqPlaying) setPlayState(false);
     }
-    requestAnimationFrame(animateSequencer);
   }
-  animateSequencer();
+  let seqRaf = requestAnimationFrame(animateSequencer);
+  onVisualsPause(() => { if (seqRaf) { cancelAnimationFrame(seqRaf); seqRaf = 0; } });
+  onVisualsResume(() => { if (!seqRaf) seqRaf = requestAnimationFrame(animateSequencer); });
 
   // ===== Init Visuals =====
   initVisuals();

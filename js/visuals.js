@@ -34,12 +34,53 @@ function fastPow15(x) {
 }
 
 // Unified rAF loop — all canvas draw functions register here
+// Hidden tab = fully paused. Blurred window = half framerate. Audio unaffected.
 const drawCallbacks = [];
+let rafId = 0;
+let skipFrame = false;
+let throttled = false;
 function registerDraw(fn) { drawCallbacks.push(fn); }
 function rafLoop() {
+  if (throttled) {
+    skipFrame = !skipFrame;
+    if (skipFrame) { rafId = requestAnimationFrame(rafLoop); return; }
+  }
   for (let i = 0; i < drawCallbacks.length; i++) drawCallbacks[i]();
-  requestAnimationFrame(rafLoop);
+  rafId = requestAnimationFrame(rafLoop);
 }
+
+// Pause/resume/throttle hooks for external rAF loops (main.js)
+const _pauseListeners = [];
+const _resumeListeners = [];
+const _throttleListeners = [];
+function onVisualsPause(fn) { _pauseListeners.push(fn); }
+function onVisualsResume(fn) { _resumeListeners.push(fn); }
+function onVisualsThrottle(fn) { _throttleListeners.push(fn); }
+
+// Tab hidden → full stop
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    throttled = false;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    for (let i = 0; i < _pauseListeners.length; i++) _pauseListeners[i]();
+  } else {
+    if (!rafId) rafId = requestAnimationFrame(rafLoop);
+    for (let i = 0; i < _resumeListeners.length; i++) _resumeListeners[i]();
+  }
+});
+
+// Window blur → half framerate; focus → full
+window.addEventListener('blur', () => {
+  if (!document.hidden) {
+    throttled = true;
+    skipFrame = false;
+    for (let i = 0; i < _throttleListeners.length; i++) _throttleListeners[i](true);
+  }
+});
+window.addEventListener('focus', () => {
+  throttled = false;
+  for (let i = 0; i < _throttleListeners.length; i++) _throttleListeners[i](false);
+});
 
 let mouseX = 0, mouseY = 0;
 let mouseActive = false;
@@ -6968,5 +7009,6 @@ export function initVisuals() {
   initSynthWave();
   initSpectrumCanvas();
   initGlobeCanvas();
-  requestAnimationFrame(rafLoop);
+  rafId = requestAnimationFrame(rafLoop);
 }
+export { onVisualsPause, onVisualsResume, onVisualsThrottle };
